@@ -2,7 +2,7 @@ set linesize 132 tab off trimspool on
 set pagesize 105
 set pause off
 set echo off
-set feedb on
+rem set feedb on
 
 column "TOTAL ALLOC (MB)" format 9G999G999G990D00
 column "TOTAL PHYS ALLOC (MB)" format 9G999G999G990D00
