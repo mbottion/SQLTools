@@ -24,12 +24,12 @@ define   end_time="case when '&2' is null then sysdate        else to_date('&2',
 
 define excluded_users_list="'SYS','SYSTEM','SYSRAC','DBSNMP','ACCENTURE','RDACCENTURE','C##MBOORA'"
 
-column username        format a10
-column machine         format a30 trunc
+column username        format a15 trunc
+column machine         format a40 trunc
 column program         format a30 trunc
 column service_name    format a20 trunc
 column action          format a20 trunc
-column module          format a20 trunc
+column module          format a25 trunc
 
 column instance_number format 999 heading inst
 
