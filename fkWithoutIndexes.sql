@@ -9,7 +9,7 @@ column tab_part_columns  format a80 trunc
 column ind_part_columns  format a80 trunc
 
 define schemas_list="'BNA','TEC','LIQ1','LIQ2','LIQF1','LIQF2','SYN1','ACE1','TGP'"
-define tab_name="case when '&1 is null then '%' else upper('&1') end"
+define tab_name="case when '&1' is null then '%' else upper('&1') end"
 
 select
    tab.owner
@@ -58,7 +58,7 @@ from (
        where
            a.constraint_name = b.constraint_name
        and b.constraint_type = 'R'
-       and a.owner in (&&schemas_list) and a.table_name like '&tab_name'
+       and a.owner in (&&schemas_list) and a.table_name like &tab_name
        and a.owner = b.owner
       group by
          a.owner
@@ -94,7 +94,7 @@ from (
              ,name ) pkc on (    ind.owner=ind.owner 
                              and ind.index_name = pkc.name)
        where
-         c.index_owner in (&&schemas_list) and c.table_name like '&tab_name'
+         c.index_owner in (&&schemas_list) and c.table_name like &tab_name
        group by
           c.table_owner
          ,c.table_name
