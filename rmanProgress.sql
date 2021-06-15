@@ -13,29 +13,15 @@ set lines 1500
 set pages 100
 col CLI_INFO format a10
 col spid format a5
-col ch format a20
+col ch format a30
 col seconds format 999999.99
 col filename format a65
 col bfc  format 9
 col "% Complete" format 999.99
 col event format a40
+col GB_PER_S format 999D99
+col LONG_WAIT_PCT format 99D99
 set numwidth 10
-
-select sysdate from dual;
-
-REM gv$session_longops (channel level)
-
-prompt
-prompt Channel progress - gv$session_longops:
-prompt
-select s.inst_id, o.sid, CLIENT_INFO ch, context, sofar, totalwork,
-                    round(sofar/totalwork*100,2) "% Complete"
-     FROM gv$session_longops o, gv$session s
-     WHERE opname LIKE 'RMAN%'
-     AND opname NOT LIKE '%aggregate%'
-     AND o.sid=s.sid
-     AND totalwork != 0
-     AND sofar <> totalwork;
 
 REM Check wait events (RMAN sessions) - this is for CURRENT waits only
 REM use the following for 11G+
@@ -45,10 +31,61 @@ prompt
 select inst_id, sid, CLIENT_INFO ch, seq#, event, state, wait_time_micro/1000000 seconds
 from gv$session where program like '%rman%' and
 wait_time = 0 and
-not action is null;
+not action is null
+order by 1,3;
 
 REM use the following for 10G
 --select  inst_id, sid, CLIENT_INFO ch, seq#, event, state, seconds_in_wait secs
 --from gv$session where program like '%rman%' and
 --wait_time = 0 and
 --not action is null;
+
+
+break on report
+compute sum of GB_PER_S on report
+
+select sysdate from dual;
+
+REM gv$session_longops (channel level)
+
+prompt
+prompt Channel progress - gv$session_longops:
+prompt
+select 
+   s.inst_id
+  ,o.sid
+  ,CLIENT_INFO ch
+  ,context
+  ,sofar
+  ,totalwork
+  ,round(sofar/totalwork*100,2) "% Complete"
+  ,aio.GB_PER_S
+  ,aio.LONG_WAIT_PCT
+FROM 
+   gv$session_longops o
+  ,gv$session s
+  ,(select 
+       inst_id
+      ,sid
+      ,serial
+      ,100* sum (long_waits) / sum (io_count) as "LONG_WAIT_PCT"
+      ,sum (effective_bytes_per_second)/1024/1024/1024 as "GB_PER_S"
+   from 
+     gv$backup_async_io
+   group by 
+      inst_id
+     ,sid
+     ,serial) aio
+WHERE 
+      opname LIKE 'RMAN%'
+  AND opname NOT LIKE '%aggregate%'
+  AND o.sid=s.sid
+  AND totalwork != 0
+  AND sofar <> totalwork
+  and aio.sid = s.sid
+  and aio.inst_id= s.inst_id
+  and aio.serial = s.serial#
+order by 
+   1
+  ,3;
+
