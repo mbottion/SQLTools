@@ -1,36 +1,32 @@
+define P1="&1"
+define P2="&2"
+define P3="&3"
+define P4="&4"
+define P5="&5"
 
-Rem 
-Rem *********************** Creation du fichier ****************************** 
-Rem 
-Rem  Nom              : descrSchemas.sql 
-Rem  Version          : 1.00.00 
-Rem  Auteur           : Michel BOTTIONE (Oracle Consulting FRANCE) 
-Rem  Date de creation : 04/03/07 
-Rem 
-Rem  But              : 
-Rem                   : Vérification du contenu de la base de données 
-Rem 
-Rem  Description      : 
-Rem                   : Ce script liste les principaux objets de la base de 
-Rem                   : données FAST afin de permettre un premier contrôle 
-Rem                   : de la migration des schémas. 
-Rem                   : . 
-Rem                   : Les informations listées sont: 
-Rem                   : . 
-Rem                   : .     1) Liste des objets et comptages. 
-Rem                   : .     2) Description des tables 
-Rem                   : .     3) Description des indexes 
-Rem                   : .     4) description des séquences 
-Rem                   : . 
-Rem                   : .   Le résultat est spoolé dans un fichier 
-Rem                   : verif_SID.lst dans le répertoire de lancemant 
-Rem                   : (SID est le nom de la base de données). 
-Rem                   : . 
-Rem                   : .   POur imprimer ce fichier, on peut le passer dans 
-Rem                   : WORD, police Courier 6, réduire les marges haut et bas 
-Rem                   : à 0,2 cm. 
-Rem 
-Rem ************************************************************************** 
+set feedback off
+set serveroutput on
+begin
+  if (upper('&P1') in ('USAGE','HELP','-?','-H'))
+  then
+    raise_application_error(-20000,'
++---------------------------------------------------------------------------------------
+| Usage:
+|    descrSchemas.sql 
+|   
+|
+|   Parameters :
+|       start    : Analysis start date (dd/mm/yyyy [hh24:mi:ss])      - Default : Noon (Today or yesterday)
+|       end      : Analysis end date   (dd/mm/yyyy [hh24:mi:ss])      - Default : now
+|       mode     : Groups on start_engine or end engine date (IN/OUT) - Defult  : IN (Injection Rate)
+|       interval : Interval wideness (in seconds)                     - Default : 3600
+|       engine   : Engine name                                        - Default : %
+|       
++---------------------------------------------------------------------------------------
+       ');
+  end if ;
+end ;
+/
 set pause off
 set feed off
 col db_name new_value db_name
