@@ -46,11 +46,75 @@ set trimspool on
 set newpage 2
 spool verif_&db_name..lst
 
-rem ttitle LEFT  "FAST: Migration ves ORACLE 10g" -
-rem        RIGHT "Base de données : &db_name" -
-rem        SKIP1 -
-rem        LEFT  "Liste de vérification des schémas applicatifs"
-rem btitle RIGHT "Informations générales (database, instance, liste des schémas)"
+alter session set container=bna0ppr ;
+select
+   200 ord
+  ,'Index' Obj_type
+  ,i.owner
+  ,i.table_name
+  ,i.index_name
+  ,'N/A' PARTITION_NAME
+  ,null
+  ,i.index_type
+  ,i.uniqueness
+  ,i.compression
+  ,i.status
+  ,i.num_rows
+  ,i.distinct_keys
+  ,i.degree
+  ,i.partitioned
+  ,to_char(i.last_analyzed,'dd/mm/yyyy') last_analyzed
+  ,ic.column_position
+  ,ic.column_name
+  ,ic.descend
+from
+  dba_indexes i
+  join dba_ind_columns ic on (    i.owner=ic.index_owner
+                              and i.index_name = ic.index_name)
+where
+  i.owner = 'BNA'
+union
+select
+   210
+  ,'Index partition' Obj_type
+  ,ip.index_owner
+  ,i.table_name
+  ,ip.index_name
+  ,ip.partition_name
+  ,ip.subpartition_count
+  ,i.index_type
+  ,i.uniqueness
+  ,ip.compression
+  ,ip.status
+  ,ip.num_rows
+  ,ip.distinct_keys
+  ,i.degree
+  ,null --ip.partitioned
+  ,to_char(ip.last_analyzed,'dd/mm/yyyy') last_analyzed
+  ,null
+  ,null
+  ,null
+from
+  dba_ind_partitions ip
+  join dba_indexes i on (    i.owner=ip.index_owner
+                         and i.index_name = ip.index_name)
+where
+  ip.index_owner='BNA'
+order by
+  3,4,5,1
+/
+
+
+
+order by
+   i.owner
+  ,i.table_name
+  ,i.index_name
+  ,ic.column_position
+
+desc dba_indexes
+desc dba_ind_columns
+desc dba_ind_partitions
 
 prompt
 prompt
