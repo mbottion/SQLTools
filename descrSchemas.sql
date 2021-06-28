@@ -43,99 +43,6 @@ set term off
 set linesize  132
 set pagesize  120
 set trimspool on
-set newpage 2
-spool verif_&db_name..lst
-
-alter session set container=bna0ppr ;
-select
-   200 ord
-  ,'Index' Obj_type
-  ,i.owner
-  ,i.table_name
-  ,i.index_name
-  ,'N/A' PARTITION_NAME
-  ,null
-  ,i.index_type
-  ,i.uniqueness
-  ,i.compression
-  ,i.status
-  ,i.num_rows
-  ,i.distinct_keys
-  ,i.degree
-  ,i.partitioned
-  ,to_char(i.last_analyzed,'dd/mm/yyyy') last_analyzed
-  ,ic.column_position
-  ,ic.column_name
-  ,ic.descend
-from
-  dba_indexes i
-  join dba_ind_columns ic on (    i.owner=ic.index_owner
-                              and i.index_name = ic.index_name)
-where
-  i.owner = 'BNA'
-union
-select
-   210
-  ,'Index partition' Obj_type
-  ,ip.index_owner
-  ,i.table_name
-  ,ip.index_name
-  ,ip.partition_name
-  ,ip.subpartition_count
-  ,i.index_type
-  ,i.uniqueness
-  ,ip.compression
-  ,ip.status
-  ,ip.num_rows
-  ,ip.distinct_keys
-  ,i.degree
-  ,null --ip.partitioned
-  ,to_char(ip.last_analyzed,'dd/mm/yyyy') last_analyzed
-  ,null
-  ,null
-  ,null
-from
-  dba_ind_partitions ip
-  join dba_indexes i on (    i.owner=ip.index_owner
-                         and i.index_name = ip.index_name)
-where
-  ip.index_owner='BNA'
-order by
-  3,4,5,1
-/
-
-
-
-order by
-   i.owner
-  ,i.table_name
-  ,i.index_name
-  ,ic.column_position
-
-desc dba_indexes
-desc dba_ind_columns
-desc dba_ind_partitions
-
-prompt
-prompt
-prompt
-prompt
-prompt .                                               F A S T
-prompt
-prompt
-prompt
-prompt .                             M i g r a t i o n   v e r s   O R A C L E   1 0 g 
-prompt
-prompt
-prompt .                             =================================================
-prompt
-prompt
-prompt .                             Vérification des schémas avant et après migration
-prompt
-prompt
-prompt .                             =================================================
-prompt
-
 prompt Base de données
 prompt ===============
 
@@ -149,14 +56,14 @@ from
 /
 
 prompt
-prompt Instance
-prompt ========
+prompt Instances
+prompt =========
 
 select
    INSTANCE_NAME                              "Nom"
   ,HOST_NAME                                  "Hôte"
 from
-  v$instance
+  gv$instance
 /
 
 prompt
@@ -180,284 +87,152 @@ select
 from
   dba_users 
 where 
-  username like '%FAST%' or username like '%AQ%'
+  oracle_maintained='N'
 order by
   username
 /
 
 set newpage 0
-ttitle LEFT  "FAST: Migration ves ORACLE 10g" -
-       RIGHT "Base de données : &db_name" -
-       SKIP1 -
-       LEFT  "Liste de vérification des schémas applicatifs" -
-       SKIP 2
-       
-btitle SKIP2 - 
-       RIGHT "Liste des objets"
-
 clear columns
 
-column OWNER          format a30 heading "Schéma"    
-column OBJECT_TYPE    format a20 heading "Type"
-column OBJECT_NAME    format a30 heading "Nom objet"
-column SUBOBJECT_NAME format a30 heading "Sous-objet"
-column STATUS         format a10 heading "Status"
-column TEMPORARY      format a5  heading "Temp?"
-
-break on OWNER skip PAGE on object_type skip 1 on report
-
-compute count LABEL "** Nbre/Type"   of OBJECT_NAME on OBJECT_TYPE 
-compute count LABEL "** Nbre/Schéma" of OBJECT_NAME on OWNER 
-compute count LABEL "** Nbre total"  of OBJECT_NAME on REPORT 
-
-select
-   OWNER
-  ,OBJECT_TYPE
-  ,OBJECT_NAME
-  ,SUBOBJECT_NAME
-  ,STATUS
-  ,TEMPORARY
-from
-  dba_objects
-where
-  owner like 'FAST%'
+select 
+  * 
+from (
+    select
+       100                                                                ORD
+      ,'Table'                                                            OBJECT_TYPE
+      ,t.owner                                                            OWNER
+      ,t.table_name                                                       TABLE_NAME
+      ,null                                                               INDEX_NAME
+      ,t.temporary                                                        TEMPORARY
+      ,null                                                               PARTITION_NAME
+      ,null                                                               SUB_PART_COUNT
+      ,null                                                               OBJECT_SUB_TYPE
+      ,null                                                               INDEX_UNIQUENESS
+      ,t.compression                                                      COMPRESSION
+      ,t.compress_for                                                     COMPRESSION_FOR
+      ,t.status                                                           STATUS
+      ,t.num_rows                                                         NUM_ROWS
+      ,null                                                               INDEX_KEYS
+      ,t.degree                                                           DEGREE
+      ,t.partitioned                                                      PARTITIONED
+      ,to_char(t.last_analyzed,'dd/mm/yyyy hh24:mi:ss')                   LAST_ANALYZED
+      ,tc.column_id                                                       COLUMN_POSITION
+      ,tc.column_name                                                     COLUMN_NAME
+      ,rpad(tc.data_type,15) ||
+        case
+          when tc.data_type='NUMBER' 
+          then '('  || lpad(to_char(tc.data_precision),4) || 
+                ',' || lpad(to_char(tc.data_scale),2) ||
+               ')'
+          when tc.data_type = 'CLOB'
+          then ''
+          when tc.data_type = 'LOB'
+          then ''
+          when tc.data_type like 'TIMESTAMP%'
+          then ''
+          else      '(' || lpad(to_char(tc.data_length),4) || '  )'           
+        end descend_or_data_type
+    from
+      dba_tables t
+      join dba_tab_columns tc on (    t.owner=tc.owner
+                                  and t.table_name = tc.table_name)
+    where
+      t.owner in (select username from dba_users where oracle_maintained='N')
+    UNION
+    select
+       110
+      ,'Table partition'
+      ,tp.table_owner
+      ,t.table_name
+      ,null
+      ,t.temporary                                            
+      ,tp.partition_name
+      ,tp.subpartition_count
+      ,null
+      ,null
+      ,tp.compression
+      ,tp.compress_for                                    
+      ,null --tp.status
+      ,tp.num_rows
+      ,null
+      ,t.degree
+      ,null
+      ,to_char(tp.last_analyzed,'dd/mm/yyyy hh24:mi:ss')
+      ,null
+      ,null
+      ,null
+    from
+      dba_tab_partitions tp
+      join dba_tables t on (     t.owner=tp.table_owner
+                             and t.table_name = tp.table_name)
+    where
+      tp.table_owner in (select username from dba_users where oracle_maintained='N')
+    UNION
+    select
+       200 ord
+      ,'Index' Obj_type
+      ,i.owner
+      ,i.table_name
+      ,i.index_name
+      ,i.temporary                                                       
+      ,'N/A' PARTITION_NAME
+      ,null
+      ,i.index_type
+      ,i.uniqueness
+      ,i.compression
+      ,null                                 
+      ,i.status
+      ,i.num_rows
+      ,i.distinct_keys
+      ,i.degree
+      ,i.partitioned
+      ,to_char(i.last_analyzed,'dd/mm/yyyy hh24:mi:ss')
+      ,ic.column_position
+      ,ic.column_name
+      ,ic.descend
+    from
+      dba_indexes i
+      join dba_ind_columns ic on (    i.owner=ic.index_owner
+                                  and i.index_name = ic.index_name)
+    where
+      i.owner in (select username from dba_users where oracle_maintained='N')
+    union
+    select
+       210
+      ,'Index partition' Obj_type
+      ,ip.index_owner
+      ,i.table_name
+      ,i.index_name
+      ,i.temporary                                        
+      ,ip.partition_name
+      ,ip.subpartition_count
+      ,i.index_type
+      ,i.uniqueness
+      ,ip.compression
+      ,null                                                  
+      ,ip.status
+      ,ip.num_rows
+      ,ip.distinct_keys
+      ,i.degree
+      ,null
+      ,to_char(ip.last_analyzed,'dd/mm/yyyy hh24:mi:ss')
+      ,null
+      ,null
+      ,null
+    from
+      dba_ind_partitions ip
+      join dba_indexes i on (    i.owner=ip.index_owner
+                             and i.index_name = ip.index_name)
+    where
+      ip.index_owner in (select username from dba_users where oracle_maintained='N')
+  )
+where 
+  &owner_where
 order by
-   owner
-  ,object_type
-  ,object_name
-  ,subobject_name
-/
-
-btitle SKIP2 - 
-       RIGHT "Liste des tables et colonnes"
-
-clear columns
-clear break
-clear compute
-
-break on OWNER skip PAGE on table_name skip 1 on report
-
-column OWNER          format a6  trunc heading "Schéma"
-column TABLE_NAME     format a30  trunc heading "Table"
-column COLUMN_NAME    format a30  trunc heading "Colonne"
-column DATA_TYPE      format a15  trunc heading "Type"
-column DATA_NULL      format a9   trunc heading "Null?"
-column DATA_DEFAULT   format a37  trunc heading "Default"
-
-select
-   replace(replace(OWNER,'FAST',''),'ADMIN','') OWNER
-  ,TABLE_NAME
-  ,COLUMN_NAME
-  ,rpad(DATA_TYPE,9) ||
-        decode (data_type
-               ,'DATE',''
-               ,'LONG',''
-               ,'LONGRAW',''
-               ,'BLOB',''
-               ,'NUMBER',decode(nvl(data_precision,0),0,'','(')
-               ,'(') ||
-        decode (data_type
-               ,'LONG',''
-               ,'LONGRAW',''
-               ,'BLOB',''
-               ,'NUMBER',data_precision
-               ,'DATE','','LONG','','LONG RAW',''
-               ,data_length ) ||
-        decode (data_type
-               ,'NUMBER',decode(nvl(data_scale,0),0,'',','||data_scale)
-               ,'') ||
-        decode (data_type
-               ,'DATE',''
-               ,'LONG',''
-               ,'LONGRAW',''
-               ,'BLOB',''
-               ,'NUMBER',decode(nvl(data_precision,0),0,'',')')
-               ,')') data_type
-  ,decode (NULLABLE,'N',' NOT NULL') DATA_NULL
-  ,DATA_DEFAULT
-from
-  dba_tab_columns
-where
-  owner like 'FAST%'
-order by
-   owner
-  ,table_name
-  ,column_id
-/
-
-btitle SKIP2 - 
-       RIGHT "Liste des indexes et colonnes indexées"
-
-clear columns
-clear break
-clear compute
-
-break on OWNER skip PAGE on table_name on index_name skip 1 on report
-
-column OWNER           format a6   trunc heading "Schéma"
-column TABLE_NAME      format a30  trunc heading "Table"
-column INDEX_NAME      format a30  trunc heading "Index"
-column COLUMN_POSITION format 999  trunc heading "Pos"
-column COLUMN_NAME     format a30  trunc heading "Colonne"
-column DESCEND         format a15  trunc heading "Sens"
-
-select
-   replace(replace(INDEX_OWNER,'FAST',''),'ADMIN','') OWNER
-  ,table_name
+   table_name
+  ,ord
   ,index_name
-  ,column_position
-  ,column_name
-  ,descend
-from
-  dba_ind_columns
-where
-  index_owner like 'FAST%'
-order by
-   index_owner
-  ,table_name
-  ,index_name
+  ,partition_name
   ,column_position
 /
-
-set feedback on
-create or replace function getCond (p_owner           in varchar2
-                                   ,p_table_name      in varchar2
-                                   ,p_constraint_name in varchar2
-                                   ) return varchar2 as
-  tmp varchar2(10000) ;
-begin
-  select 
-    search_condition
-  into
-    tmp
-  from
-    all_constraints
-  where
-        owner           = p_owner
-    and table_name      = p_table_name
-    and constraint_name = p_constraint_name ;
-  return(substr(tmp,1,50)) ;
-exception
-  when others then
-    return ('???') ;
-end ;
-/
-
-set feedback on
-show err
-
-
-
-btitle SKIP2 - 
-       RIGHT "Liste et état des contraintes"
-
-clear columns
-clear break
-clear compute
-
-break on OWNER skip PAGE on table_name  skip 2 on constraint_type on constraint_name on status on report
-
-column OWNER           format a6   trunc heading "Schéma"
-column TABLE_NAME      format a30  trunc heading "Table"
-column CONSTRAINT_NAME format a30  trunc heading "Contrainte"
-column CONDITIONS      format a60  trunc heading "Détail + Del Rule / Deferable / Defered / Validated"
-column ORD             noprint
-column ORD2            noprint
-
-select
-   replace(replace(OWNER,'FAST',''),'ADMIN','') OWNER
-  ,TABLE_NAME
-  ,CONSTRAINT_TYPE
-  ,CONSTRAINT_NAME
-  ,decode(constraint_type
-         ,'C',getCond(OWNER,TABLE_NAME,CONSTRAINT_NAME)
-         ,'R','Ref C : ' || R_OWNER || '.' || R_CONSTRAINT_NAME 
-         ,'P','Index : ' || INDEX_OWNER || '.' || INDEX_NAME 
-         ,'U','Index : ' || INDEX_OWNER || '.' || INDEX_NAME 
-         ,'Type non prévu: ' || constraint_type
-         ) CONDITIONS
-  ,10 ORD
-  ,CONSTRAINT_NAME ORD2
-from
-  dba_constraints
-where
-  owner like 'FAST%'
-UNION
-select
-   replace(replace(OWNER,'FAST',''),'ADMIN','') OWNER
-  ,TABLE_NAME
-  ,CONSTRAINT_TYPE
-  ,'---> ' || STATUS
-  ,rpad(nvl(DELETE_RULE,' '),10) || '/ ' ||
-   rpad(nvl(DEFERRABLE ,' '),15) || '/ ' ||
-   rpad(nvl(DEFERRED   ,' '),10) || '/ ' ||
-   rpad(nvl(VALIDATED  ,' '),10) || 
-   ''
-  ,20 ORD
-  ,CONSTRAINT_NAME
-from
-  dba_constraints
-where
-  owner like 'FAST%'
-order by
-   1
-  ,2
-  ,3
-  ,7
-  ,6
-/
-
-set feedback off
-drop function getCond ;
-set feedback on
- 
-btitle SKIP2 - 
-       RIGHT "Liste des séquences"
-
-clear columns
-clear break
-clear compute
-
-break on OWNER skip 2
-
-column OWNER           format a6                trunc heading "Schéma"
-column SEQUENCE_NAME   format a30               trunc heading "Nom"
-column MIN_VALUE       format 99                trunc heading "Min"
-column MAX_VALUE       format 999G999G999G999G999G999G999G999G999  trunc heading "Max"
-column INCREMENT_BY    format 99                trunc heading "Incr."
-column CYCLE_FLAG      format a10               trunc heading "Cycle"
-column ORDER_FLAG      format a10               trunc heading "Order"
-column CACHE_SIZE      format 9999999           trunc heading "Cache"
-column LAST_NUMBER     format 999G999G999 trunc heading "Dernier"
-
-select
-   replace(replace(SEQUENCE_OWNER,'FAST',''),'ADMIN','') OWNER
-  ,SEQUENCE_NAME
-  ,MIN_VALUE
-  ,MAX_VALUE
-  ,INCREMENT_BY
-  ,decode(CYCLE_FLAG,'Y','CYCLE','N','NO CYCLE',CYCLE_FLAG) CYCLE_FLAG 
-  ,decode(ORDER_FLAG,'Y','ORDER','N','NO ORDER',ORDER_FLAG) ORDER_FLAG 
-  ,CACHE_SIZE
-  ,LAST_NUMBER
-from
-  dba_sequences
-where
-  sequence_owner like 'FAST%'
-order by
-   sequence_owner
-  ,sequence_name
-/
-
-spool off
-
-set linesize 80
-clear columns
-clear breaks
-set term on
-set pagesize 23
-set pause off
-ttitle off
-btitle off
-
-rem exit
