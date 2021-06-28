@@ -7,7 +7,7 @@ define P5="&5"
 set feedback off
 set serveroutput on
 begin
-  if (upper('&P1') in ('USAGE','HELP','-?','-H'))
+  if (upper(q'[&P1]') in ('USAGE','HELP','-?','-H'))
   then
     raise_application_error(-20000,'
 +---------------------------------------------------------------------------------------
@@ -16,66 +16,62 @@ begin
 |   
 |
 |   Parameters :
-|       start    : Analysis start date (dd/mm/yyyy [hh24:mi:ss])      - Default : Noon (Today or yesterday)
-|       end      : Analysis end date   (dd/mm/yyyy [hh24:mi:ss])      - Default : now
-|       mode     : Groups on start_engine or end engine date (IN/OUT) - Defult  : IN (Injection Rate)
-|       interval : Interval wideness (in seconds)                     - Default : 3600
-|       engine   : Engine name                                        - Default : %
+|       where    : Where clause de selection des users                - Default : like ''%''
 |       
 +---------------------------------------------------------------------------------------
        ');
   end if ;
 end ;
 /
+col where_clause_owner new_value where_clause_owner noprint
+select nvl(q'[&P1]','like ''%''') where_clause_owner from dual ;
 set pause off
 set feed off
-col db_name new_value db_name
-set termout off
+col db_name        new_value db_name
+col owner          format a20 trunc
+col username       format a20
+col table_name     format a30
+col index_name     format a30
+col partition_name format a30
+col column_name    format a30
+col ord            format 999 noprint
+col object_type    format a20
 
 select
   name db_name
 from 
   v$database ;
 
-set term off
 
 
-set linesize  132
-set pagesize  120
+set linesize  2000
+set pagesize  10000
 set trimspool on
-prompt Base de données
+prompt Base de donnees
 prompt ===============
 
 select
    name                                       "Nom"
-  ,to_char (created,'dd/mm/yyyy hh24:mi:ss')  "Création"
+  ,to_char (created,'dd/mm/yyyy hh24:mi:ss')  "Creation"
   ,log_mode                                   "Log mode"
   ,db_unique_name                             "Nom unique"
 from
   v$database
 /
-
 prompt
 prompt Instances
 prompt =========
 
 select
    INSTANCE_NAME                              "Nom"
-  ,HOST_NAME                                  "Hôte"
+  ,HOST_NAME                                  "Hote"
 from
   gv$instance
 /
 
 prompt
-prompt Liste des schémas
+prompt Liste des schemas
 prompt =================
-
-column USERNAME             format a25 heading "Nom"           
-column ACCOUNT_STATUS       format a10 heading "Status"        
-column DEFAULT_TABLESPACE   format a20 heading "Default TBS"   
-column TEMPORARY_TABLESPACE format a20 heading "Temporary TBS" 
-column DAT                  format a20 heading "Création"      
-
 
 
 select
@@ -88,12 +84,11 @@ from
   dba_users 
 where 
   oracle_maintained='N'
+  and username &where_clause_owner
 order by
   username
 /
 
-set newpage 0
-clear columns
 
 select 
   * 
@@ -228,7 +223,7 @@ from (
       ip.index_owner in (select username from dba_users where oracle_maintained='N')
   )
 where 
-  &owner_where
+  owner &where_clause_owner
 order by
    table_name
   ,ord
