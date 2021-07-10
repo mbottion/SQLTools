@@ -68,7 +68,7 @@ where
 ,'background_dump_dest')
 union
 select 
-  30 ord , 'order by 2,1'
+  30 ord , 'order by 2,1;'
 from dual
 /
 
