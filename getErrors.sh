@@ -5,15 +5,37 @@ die()
   "
  exit 1
 }
-[ "$1" = "" ] && die "Fichier trace non spcifie"
-[ ! -f $1 ] && die  "Fichier $1 introuvable"
-f=$(basename $1)
+usage()
+{
+  echo "Usage
+  
+  $(basename $0) [-h] [file]
 
-if [ "$(file $1 | grep -i ASCII)" = "" ]
+    ORACLE Trace file analysis. Trace file can be the online alert.log or a zipped one
+  by defalut it takes the alert-log of the current database.
+
+    If the alert.log is to be analyzed, we try to access the alert.log of the second instance too"
+ exit 1
+}
+[ "$1" = "-?" -o "$1" = "-h" ] && usage
+file=$1
+[ "$file" = "" -a -f $ORACLE_BASE/diag/rdbms/$ORACLE_UNQNAME/$ORACLE_SID/trace/alert_$ORACLE_SID.log ] \
+               && file=$ORACLE_BASE/diag/rdbms/$ORACLE_UNQNAME/$ORACLE_SID/trace/alert_$ORACLE_SID.log
+[ "$file" = "" ] && die "Fichier trace non specifie"
+[ ! -f $file ] && die  "Fichier $1 introuvable"
+f=$(basename $file)
+
+if [ "$(file $file | grep -i ASCII)" = "" ]
 then
-  cmd="zcat $1"
+  cmd="zcat $file"
 else
-  cmd="cat $1"
+  cmd="cat $file"
+fi
+ANALYZE_CURRENT_ALERT=N
+fullFile=$(readlink -f $file)
+if  [ "$fullFile" = "$ORACLE_BASE/diag/rdbms/$ORACLE_UNQNAME/$ORACLE_SID/trace/alert_$ORACLE_SID.log" ]
+then
+  ANALYZE_CURRENT_ALERT=Y
 fi
 
 echo ""
@@ -33,6 +55,9 @@ BEGIN {jour="";test_print=0; error=""; nb=0;}
 /ORA-0$/ {next}
 /in tablespace SYSAUX/ {next}
 /ORA-/ { error=$0 }
+/Starting ORACLE instance/   { error=sprintf("*** INSTANCE       START *** : %s",$0) }
+/Instance shutdown complete/ { error=sprintf("*** INSTANCE STOP        *** : %s",$0) }
+/terminating the instance/   { error=sprintf("*** INSTANCE CRASH       *** : %s",$0) }
 {
   if ( test_print==1)
   {
@@ -72,5 +97,51 @@ BEGIN {jour="";test_print=0; error=""; nb=0;}
     test_print=0
   }
 }
-
 '
+
+if [ "$LOCAL" != "Y" -a "$ANALYZE_CURRENT_ALERT" = "Y" ]
+then
+  localServer=$(hostname -f)
+  scriptPath=$(readlink -f $0)
+  if    [[ "$localServer" =~ ^[^\.]*1\. ]]
+  then
+    autreNoeud=$(echo $localServer | sed -e "s;^\([^\.]*\)1;\12;")
+    autreSID=$(echo $ORACLE_SID | sed -e "s;^\([^\.]*\)1;\12;")
+  elif  [[ "$localServer" =~ ^[^\.]*2\. ]]
+  then
+    autreNoeud=$(echo $localServer | sed -e "s;^\([^\.]*\)2;\11;")
+    autreSID=$(echo $ORACLE_SID | sed -e "s;^\([^\.]*\)1;\11;")
+  else
+    die "Nom de serveur non connu"
+  fi
+  autreAlert=$ORACLE_BASE/diag/rdbms/$ORACLE_UNQNAME/$autreSID/trace/alert_$autreSID.log
+
+
+  echo
+  echo "======================================================================"
+  echo "Copie et lancement de $scriptPath sur $autreNoeud"
+  echo "======================================================================"
+  echo
+
+  ssh -o StrictHostKeyChecking=no $autreNoeud true || die "$autre Noeud non accessible"
+  ssh -o StrictHostKeyChecking=no $autreNoeud mkdir -p $(dirname $scriptPath) || die "Impossible de creer le repertoire"
+  ssh -o StrictHostKeyChecking=no $autreNoeud test -f $autreAlert || die "$autreAlert non trouve sur $autreNoeud"
+  scp -o StrictHostKeyChecking=no -q $scriptPath ${autreNoeud}:$scriptPath || die "Impossible de recopier le script"
+  envFile=/home/oracle/$(echo $ORACLE_SID | sed -e "s;.$;;").env
+  ssh -o StrictHostKeyChecking=no $autreNoeud "ORACLE_SID=None ; . $envFile ; export LOCAL=Y export REMOTE=Y ; $scriptPath $autreAlert"
+  ssh -o StrictHostKeyChecking=no $autreNoeud rm -f $scriptPath || die "Impossible de supprimer le script copie"
+
+fi
+
+if [ "$REMOTE" != "Y" ]
+then
+  echo "
+
+   Trace file analysis completed:
+   =============================
+    "
+  echo "   $localServer : $file"
+[ "$autreNoeud" != "" ] && echo "   $autreNoeud : $autreAlert"
+  echo "
+   ============================="
+fi
