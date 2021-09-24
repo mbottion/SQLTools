@@ -33,6 +33,9 @@ end ;
 --
 define mode="case when '&P1' is null then 'MOD' else upper('&P1') end"
 -
+prompt set lines 500 trimout on trimspool off pages 2000 tab off
+prompt column name format a50
+prompt column value format a50
 set lines 500 heading off feedback off pagesize 2000
 column ord format 999 noprint
 column a format a500
@@ -71,8 +74,3 @@ select
   30 ord , 'order by 2,1;'
 from dual
 /
-
-prompt
-prompt Copy the output and run it on the database for wich you want to compare the parameters
-prompt
-
