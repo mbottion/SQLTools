@@ -33,25 +33,56 @@ end ;
 --
 define mode="case when '&P1' is null then 'MOD' else upper('&P1') end"
 -
-prompt set lines 500 trimout on trimspool off pages 2000 tab off
-prompt column name format a50
-prompt column value format a50
+prompt set lines 500 trimout on trimspool on pages 2000 tab off
+prompt column name format a40
+prompt column value format a40
 set lines 500 heading off feedback off pagesize 2000
 column ord format 999 noprint
-column a format a500
-
+column a format a400 
+column b format a400 newline
+set recsep off
 
 select 
-  10 ord , '      select null INST_ID ,null NAME,null VALUE,null VALUE_' || name || ' from dual where 1=2' a
+   10 ord , '      select null INST_ID ,null NAME,null VALUE,null VALUE_' || name || ' from dual where 1=2' a
+          , 'UNION select null INST_ID ,null NAME,null VALUE,null VALUE_' || name || ' from dual where 1=2' b
 from v$database
 union
 select
-  20 ord , 'UNION select inst_id,name,value,'''|| value || ''' from gv$parameter where name = ''' || name || ''' and inst_id=' || inst_id || ' and nvl(value,''$$@@$$'') != nvl('''||value||''',''$$@@$$'') '  a
+   20 ord , 'UNION select inst_id,name,value,'''|| value || ''' from gv$parameter where name = ''' || name || ''' and inst_id=' || inst_id || ' and nvl(value,''$$@@$$'') != nvl('''||value||''',''$$@@$$'') '  a
+          , '-- ----'
 from 
   gv$parameter 
 where 
       (&mode='ALL' or isdefault='FALSE')
   and name  not like 'log_archive%' 
+  and not regexp_like(name,'^_')
+  and name not in ('local_listener','remote_listener'
+,'audit_file_dest'
+,'background_dump_dest'
+,'cluster_interconnects'
+,'control_files'
+,'core_dump_dest'
+,'db_name'
+,'db_unique_name'
+,'dg_broker_config_file1'
+,'dg_broker_config_file2'
+,'dispatchers'
+,'instance_name'
+,'service_names'
+,'spfile'
+,'user_dump_dest'
+,'audit_file_dest'
+,'background_dump_dest')
+union
+select
+   30 ord , 'UNION select inst_id,name,value,'''|| value || ''' from gv$parameter where name = ''' || name || ''' and inst_id=' || inst_id || ' and nvl(value,''$$@@$$'') != nvl('''||value||''',''$$@@$$'') '  a
+          , 'UNION select '||inst_id||','''||name||''',''  *** Not Set ***'','''|| value || ''' from dual where not exists (select 1 from gv$parameter  where name = ''' || name || ''' and inst_id=' || inst_id ||') '  a
+from 
+  gv$parameter 
+where 
+      (&mode='ALL' or isdefault='FALSE')
+  and name  not like 'log_archive%' 
+  and regexp_like(name,'^_')
   and name not in ('local_listener','remote_listener'
 ,'audit_file_dest'
 ,'background_dump_dest'
@@ -71,6 +102,7 @@ where
 ,'background_dump_dest')
 union
 select 
-  30 ord , 'order by 2,1;'
+   40 ord , 'order by 2,1;'
+          , null
 from dual
 /
