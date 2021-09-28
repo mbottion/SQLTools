@@ -42,6 +42,7 @@ end ;
 define mode="case when '&P1' is null then 'MOD' else upper('&P1') end"
 define pdb="case when '&P2' is null then '' else upper('&P2') end"
 
+prompt set feedback off
 prompt col 1 new_value 1
 prompt select null "1" from dual where 1=2 ;;
 prompt set define !
