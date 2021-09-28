@@ -105,7 +105,7 @@ where
 union
 select /* Non Hidden parameters */
    20 ord 
-  ,'UNION select inst_id,name,value || case isdefault when ''FALSE'' then '' (SPFILE)'' else null end,'''|| value || ''' from gv$parameter where name = ''' || name || ''' and inst_id=' || inst_id || ' and nvl(value,''$$@@$$'') != nvl('''||value||''',''$$@@$$'') '  a
+  ,'UNION select inst_id,name,value || case isdefault when ''FALSE'' then '' (SPFILE)'' else null end,'''|| value || ''' from gv$parameter where name = ''' || name || ''' and inst_id=' || inst_id || ' and (nvl(value,''$$@@$$'') != nvl('''||value||''',''$$@@$$'') or isdefault != '''||isdefault||''')'  a
   , '-- ----'
 --  ,name
 --  ,value || case isdefault when 'TRUE' then ' (Def)' else null end
