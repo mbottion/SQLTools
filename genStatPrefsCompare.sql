@@ -6,7 +6,7 @@ define P5="&5"
 
 --define P1="DBA2AP"
 --define P2="%"
---define P3="DEGREE"
+--define P3="DEG%"
 set feedback off
 set serveroutput on
 set verify off
@@ -74,6 +74,26 @@ with
       end if ;
     end if ;
   end ;
+selected_tables as (
+  select
+    owner
+    ,table_name
+    ,pref_name
+  from dba_tables
+  join (SELECT  
+          regexp_substr('&liste1,&liste2,&liste3', '(,)?([^,]*)(,)?', 1, level, 'i', 2) pref_name
+        FROM    
+          dual 
+        connect BY 
+          level <= regexp_count ('&liste1,&liste2,&liste3', ',') + 1) on (1=1) 
+  where 
+      owner like &schemaName
+--      and owner not in ('ACE1','BNA','CTDBCT','INF','LIQ1','LIQ2','LIQF1','LIQF2','MES','SYN1','TEC','TGP','WIB')
+--      and owner not in ('DBA2AP','RDACCENTURE')
+      and owner not in (select username from dba_users where oracle_maintained='Y')
+      and table_name like &tableName
+--      and table_name in ('RES_ANALYSE_RESSOURCE','RES_PERIODE_MANQUANTE','RES_RESSOURCE_RETENUE','PER_RES_BASE','PER_RES_BASE_ANALYSE','GPI_PRESTATION','GPI_DROIT','GPI_DROIT_RESANALYSE','PER_MAINTIEN_DROIT')
+      and pref_name like &prefName    )
 select
          'Prompt                                                                          ' || chr(10) ||
          'Prompt     Running preference comparison ....                                   ' || chr(10) ||
@@ -96,7 +116,7 @@ select
          '      v := dbms_stats.get_prefs(p,s,t) ;                                        ' || chr(10) ||
          '    exception when others then                                                  ' || chr(10) ||
          '      if   (sqlcode =-20001 )  then v := ''N/A'' ;                              ' || chr(10) ||
-         '      elsif (sqlcode =-20000 ) then v := ''Non Existant Table'' ;               ' || chr(10) ||
+         '      elsif (sqlcode =-20000 ) then v := ''*** Non Existant Table ***'' ;       ' || chr(10) ||
          '      else                          raise ;                                     ' || chr(10) ||
          '      end if ;                                                                  ' || chr(10) ||
          '    end ;                                                                       ' || chr(10) ||
@@ -108,7 +128,6 @@ select
          '    end if ;                                                                    ' || chr(10) ||
          '  end ;                                                                         ' || chr(10) ||
          '' a
-  ,'-- ------------------------------------------------' a
   ,5    ord
   ,null ord
   ,null ord
@@ -117,7 +136,6 @@ from v$database
 UNION
 select 
    '      select null Owner  ,null table_name  , null pref_name                  , null VALUE                                                                    , null VALUE_' || name || ' from dual where 1=2' a
-  ,'UNION select null Owner  ,null table_name  , null pref_name                  , null VALUE                                                                    , null VALUE_' || name || ' from dual where 1=2' a
   ,10   ord 
   ,null ord
   ,null ord
@@ -125,50 +143,70 @@ select
 from v$database
 UNION
 select
-   'UNION select owner       ,table_name       , '''||pref_name||''''||
-      '  , get_or_comp_pref('''||owner||''','''||table_name||''','''||pref_name||'''),'''||pref_value|| '''    '||
-      '    from dba_tables where owner=''' || owner ||''' and table_name=''' || table_name || '''' ||
-      ' and get_or_comp_pref('''||owner||''','''||table_name||''','''||pref_name||''','''||pref_value||''') = ''DIFFERENT''' ||
-      ''
-  ,'UNION select '''||owner||'''       ,'''||table_name||'''       , '''||pref_name||''''||
-     ',''*** Non Existant TABLE ***'','''|| pref_value || ''' from dual ' || 
-     ' where not exists (select 1 from dba_tables where owner=''' || owner||''' and table_name=''' ||table_name || ''')' ||
-     ''
+   'UNION select o,t,n,p1,p2 from ('
   ,20
-  ,owner
-  ,table_name
-  ,pref_name
-from
-  (select
-    owner
-    ,table_name
-    ,pref_name
-    ,get_or_comp_pref(owner,table_name,pref_name) pref_value
-  from
-    dba_tables
-  join (SELECT  
-          regexp_substr('&liste1,&liste2,&liste3', '(,)?([^,]*)(,)?', 1, level, 'i', 2) pref_name
-        FROM    
-          dual 
-        connect BY 
-          level <= regexp_count ('&liste1,&liste2,&liste3', ',') + 1) on (1=1) 
-  where 
-      owner like &schemaName
---    and owner not in ('ACE1','BNA','CTDBCT','INF','LIQ1','LIQ2','LIQF1','LIQF2','MES','SYN1','TEC','TGP','WIB')
---    and owner not in ('DBA2AP','RDACCENTURE')
-    and owner not in (select username from dba_users where oracle_maintained='Y')
---    and table_name like &tableName
-    and table_name in ('RES_ANALYSE_RESSOURCE','RES_PERIODE_MANQUANTE','RES_RESSOURCE_RETENUE','PER_RES_BASE','PER_RES_BASE_ANALYSE','GPI_PRESTATION','GPI_DROIT','GPI_DROIT_RESANALYSE','PER_MAINTIEN_DROIT')
-    and pref_name like &prefName)
-union
-select 
-  'order by 2,1'
-  ,'/'
-  ,40 ord 
   ,null
   ,null
   ,null
 from dual
-order by 3,4,5,6 
+UNION
+select
+  '   select owner o,table_name t,pref_name n,get_or_comp_pref(owner,table_name,pref_name) p1,pref_value p2 from ('
+  ,30
+  ,null
+  ,null
+  ,null
+from dual
+UNION
+select
+   case rownum when 1 then '             ' else '       UNION ' end || 
+       'select ''' || owner || ''' owner,'''  || table_name || ''' table_name,''' || 
+       pref_name ||  ''' pref_name,'''  || get_or_comp_pref(owner,table_name,pref_name) || ''' pref_value from dual'
+  ,40
+  ,owner || lpad(rownum,6,'0')
+  ,table_name
+  ,pref_name
+from selected_tables
+UNION
+select
+  '                      )'
+  ,50
+  ,null
+  ,null
+  ,null
+from dual
+UNION
+select
+  '              ) where p1!=p2'
+  ,51
+  ,null
+  ,null
+  ,null
+from dual
+/*UNION
+select
+  'UNION select '''||owner||''','''||table_name||''','''||pref_name||''',''*** Non Existant Table ***'','''||get_or_comp_pref(owner,table_name,pref_name) ||''' from dual '||
+     ' where not exists (select 1 from dba_tables where owner=''' || owner||''' and table_name=''' ||table_name || ''')' 
+  ,60
+  ,null
+  ,null
+  ,null
+from selected_tables */
+union
+select 
+  'order by 2,1'
+  ,70 ord 
+  ,null
+  ,null
+  ,null
+from dual
+union
+select 
+  '/'
+  ,71 ord 
+  ,null
+  ,null
+  ,null
+from dual
+order by 2,3,4,5 
 /
-exit
