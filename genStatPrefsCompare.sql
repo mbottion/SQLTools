@@ -9,6 +9,7 @@ define P5="&5"
 --define P3="DEGREE"
 set feedback off
 set serveroutput on
+set verify off
 declare
  dummy number ;
 begin
@@ -74,6 +75,17 @@ with
     end if ;
   end ;
 select
+         'Prompt                                                                          ' || chr(10) ||
+         'Prompt     Running preference comparison ....                                   ' || chr(10) ||
+         'Prompt     ==================================                                   ' || chr(10) ||
+         'Prompt                                                                          ' || chr(10) ||
+         'Prompt     If a lot of tables are selected, this script may run for             ' || chr(10) ||
+         'Prompt  several hours, please be patient ....                                   ' || chr(10) ||
+         'Prompt                                                                          ' || chr(10) ||
+         'col owner                    format a10                                         ' || chr(10) ||
+         'col table_name               format a30                                         ' || chr(10) ||
+         'col value                    format a50                                         ' || chr(10) ||
+         'col value_' || name || '     format a50                                         ' || chr(10) ||
          'with                                                                            ' || chr(10) ||
          '  function get_or_comp_pref(s in varchar2, t in varchar2                        ' || chr(10) ||
          '                           ,p in varchar2, old_value in varchar2 default null)  ' || chr(10) ||
@@ -95,17 +107,17 @@ select
          '      end if ;                                                                  ' || chr(10) ||
          '    end if ;                                                                    ' || chr(10) ||
          '  end ;                                                                         ' || chr(10) ||
-         ''
-  ,'--'
-  ,5
-  ,null
-  ,null
-  ,null
-from dual
+         '' a
+  ,'-- ------------------------------------------------' a
+  ,5    ord
+  ,null ord
+  ,null ord
+  ,null ord
+from v$database
 UNION
 select 
    '      select null Owner  ,null table_name  , null pref_name                  , null VALUE                                                                    , null VALUE_' || name || ' from dual where 1=2' a
-  ,'      select null Owner  ,null table_name  , null pref_name                  , null VALUE                                                                    , null VALUE_' || name || ' from dual where 1=2' a
+  ,'UNION select null Owner  ,null table_name  , null pref_name                  , null VALUE                                                                    , null VALUE_' || name || ' from dual where 1=2' a
   ,10   ord 
   ,null ord
   ,null ord
@@ -145,15 +157,18 @@ from
 --    and owner not in ('ACE1','BNA','CTDBCT','INF','LIQ1','LIQ2','LIQF1','LIQF2','MES','SYN1','TEC','TGP','WIB')
 --    and owner not in ('DBA2AP','RDACCENTURE')
     and owner not in (select username from dba_users where oracle_maintained='Y')
-    and table_name like &tableName
+--    and table_name like &tableName
+    and table_name in ('RES_ANALYSE_RESSOURCE','RES_PERIODE_MANQUANTE','RES_RESSOURCE_RETENUE','PER_RES_BASE','PER_RES_BASE_ANALYSE','GPI_PRESTATION','GPI_DROIT','GPI_DROIT_RESANALYSE','PER_MAINTIEN_DROIT')
     and pref_name like &prefName)
 union
 select 
-  'order by 2,1;'
-  ,null
+  'order by 2,1'
+  ,'/'
   ,40 ord 
   ,null
   ,null
   ,null
 from dual
-order by 3,4,5,6 ;
+order by 3,4,5,6 
+/
+exit
