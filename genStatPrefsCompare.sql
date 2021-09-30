@@ -49,7 +49,7 @@ define liste1="APPROXIMATE_NDV_ALGORITHM,AUTO_STAT_EXTENSIONS,AUTO_TASK_STATUS,A
 define liste2="DEGREE,ESTIMATE_PERCENT,GLOBAL_TEMP_TABLE_STATS,GRANULARITY,INCREMENTAL,INCREMENTAL_STALENESS,INCREMENTAL_LEVEL"
 define liste3="METHOD_OPT,NO_INVALIDATE,OPTIONS,PREFERENCE_OVERRIDES_PARAMETER,PUBLISH,STALE_PERCENT,STAT_CATEGORY,TABLE_CACHED_BLOCKS"
 
-set lines 500 heading off feedback off pagesize 2000
+set lines 500 heading off feedback off pagesize 0
 column ord format 999 noprint
 column a format a400 
 column b format a400 newline
@@ -175,7 +175,7 @@ select
        'select ''' || owner || ''' owner,'''  || table_name || ''' table_name,''' || 
        pref_name ||  ''' pref_name,'''  || get_or_comp_pref(owner,table_name,pref_name) || ''' pref_value from dual'
   ,40
-  ,owner || lpad(rownum,6,'0')
+  ,lpad(rownum,6,'0') || owner  
   ,table_name
   ,pref_name
 from selected_tables
