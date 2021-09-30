@@ -6,7 +6,7 @@ define P5="&5"
 
 --define P1="DBA2AP"
 --define P2="%"
---define P3="DEG%"
+--define P3="%"
 set feedback off
 set serveroutput on
 set verify off
@@ -112,20 +112,21 @@ select
          '  return varchar2 is                                                            ' || chr(10) ||
          '    v varchar2(100) ;                                                           ' || chr(10) ||
          '  begin                                                                         ' || chr(10) ||
-         '    begin                                                                       ' || chr(10) ||
+         '--    begin                                                                     ' || chr(10) ||
          '      v := dbms_stats.get_prefs(p,s,t) ;                                        ' || chr(10) ||
          '    exception when others then                                                  ' || chr(10) ||
          '      if   (sqlcode =-20001 )  then v := ''N/A'' ;                              ' || chr(10) ||
          '      elsif (sqlcode =-20000 ) then v := ''*** Non Existant Table ***'' ;       ' || chr(10) ||
          '      else                          raise ;                                     ' || chr(10) ||
          '      end if ;                                                                  ' || chr(10) ||
-         '    end ;                                                                       ' || chr(10) ||
-         '    if old_value is null then return (nvl(v,''NULL'')) ;                        ' || chr(10) ||
-         '    else                                                                        ' || chr(10) ||
-         '      if old_value <> v then return (''DIFFERENT'') ;                           ' || chr(10) ||
-         '      else                   return (''SAME'');                                 ' || chr(10) ||
-         '      end if ;                                                                  ' || chr(10) ||
-         '    end if ;                                                                    ' || chr(10) ||
+         '      return(v);                                                                ' || chr(10) ||
+         '--    end ;                                                                     ' || chr(10) ||
+         '--    if old_value is null then return (nvl(v,''NULL'')) ;                      ' || chr(10) ||
+         '--    else                                                                      ' || chr(10) ||
+         '--      if old_value <> v then return (''DIFFERENT'') ;                         ' || chr(10) ||
+         '--      else                   return (''SAME'');                               ' || chr(10) ||
+         '--      end if ;                                                                ' || chr(10) ||
+         '--    end if ;                                                                  ' || chr(10) ||
          '  end ;                                                                         ' || chr(10) ||
          '' a
   ,5    ord
@@ -159,7 +160,18 @@ select
 from dual
 UNION
 select
-   case rownum when 1 then '             ' else '       UNION ' end || 
+  '   select * from ('
+  ,31
+  ,null
+  ,null
+  ,null
+from dual
+UNION
+select
+   case 
+   when rownum=1           then '                          '  
+   when mod(rownum,500)=1  then '     ) UNION ALL (        ' 
+   else               '                          UNION ALL ' end || 
        'select ''' || owner || ''' owner,'''  || table_name || ''' table_name,''' || 
        pref_name ||  ''' pref_name,'''  || get_or_comp_pref(owner,table_name,pref_name) || ''' pref_value from dual'
   ,40
@@ -167,6 +179,14 @@ select
   ,table_name
   ,pref_name
 from selected_tables
+UNION
+select
+  '            )'
+  ,41
+  ,null
+  ,null
+  ,null
+from dual
 UNION
 select
   '                      )'
