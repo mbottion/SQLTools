@@ -1,3 +1,6 @@
+define P1="&1"
+define P2="&2"
+
 set serveroutput on
 declare 
   n number ;
