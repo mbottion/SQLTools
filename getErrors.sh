@@ -55,9 +55,11 @@ BEGIN {jour="";test_print=0; error=""; nb=0;}
 /ORA-0$/ {next}
 /in tablespace SYSAUX/ {next}
 /ORA-/ { error=$0 }
-/Starting ORACLE instance/   { error=sprintf("*** INSTANCE       START *** : %s",$0) }
-/Instance shutdown complete/ { error=sprintf("*** INSTANCE STOP        *** : %s",$0) }
-/terminating the instance/   { error=sprintf("*** INSTANCE CRASH       *** : %s",$0) }
+/Starting ORACLE instance/                                              { error=sprintf("*** INSTANCE       START *** : %s",$0) }
+/Instance shutdown complete/                                            { error=sprintf("*** INSTANCE STOP        *** : %s",$0) }
+/terminating the instance/                                              { error=sprintf("*** INSTANCE CRASH       *** : %s",$0) }
+/Background Media Recovery process shutdown/                            { error=sprintf("*** REDO APPLY STOP      *** : %s",$0) }
+/Completed: ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT/ { error=sprintf("*** REDO APPLY     START *** : %s",$0) }
 {
   if ( test_print==1)
   {
