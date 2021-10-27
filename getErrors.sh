@@ -9,15 +9,18 @@ usage()
 {
   echo "Usage
   
-  $(basename $0) [-h] [file]
+  $(basename $0) [-h] [-l] [file]
 
     ORACLE Trace file analysis. Trace file can be the online alert.log or a zipped one
-  by defalut it takes the alert-log of the current database.
+  by default it takes the alert-log of the current database.
+
+    -l : Local node only
 
     If the alert.log is to be analyzed, we try to access the alert.log of the second instance too"
  exit 1
 }
 [ "$1" = "-?" -o "$1" = "-h" ] && usage
+[ "$1" = "-l" ] && { LOCAL=Y ; shift ; }
 file=$1
 [ "$file" = "" -a -f $ORACLE_BASE/diag/rdbms/$ORACLE_UNQNAME/$ORACLE_SID/trace/alert_$ORACLE_SID.log ] \
                && file=$ORACLE_BASE/diag/rdbms/$ORACLE_UNQNAME/$ORACLE_SID/trace/alert_$ORACLE_SID.log
@@ -38,6 +41,10 @@ then
   ANALYZE_CURRENT_ALERT=Y
 fi
 
+RED_NORM="$(tput setaf 1)"
+RED_BOLD="$(tput bold ;tput setaf 1)"
+GREEN_NO="$(tput setaf 2)"
+NORM="$(tput sgr0)"
 echo ""
 echo "--+--- Fichier trace: $f ($(hostname))"
 echo "  |"
@@ -55,11 +62,11 @@ BEGIN {jour="";test_print=0; error=""; nb=0;}
 /ORA-0$/ {next}
 /in tablespace SYSAUX/ {next}
 /ORA-/ { error=$0 }
-/Starting ORACLE instance/                                              { error=sprintf("*** INSTANCE       START *** : %s",$0) }
-/Instance shutdown complete/                                            { error=sprintf("*** INSTANCE STOP        *** : %s",$0) }
-/terminating the instance/                                              { error=sprintf("*** INSTANCE CRASH       *** : %s",$0) }
-/Background Media Recovery process shutdown/                            { error=sprintf("*** REDO APPLY STOP      *** : %s",$0) }
-/Completed: ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT/ { error=sprintf("*** REDO APPLY     START *** : %s",$0) }
+/Starting ORACLE instance/                                              { error=sprintf("'${GREEN_NO}'*** INSTANCE       START *** '${NORM}': %s",$0) }
+/Instance shutdown complete/                                            { error=sprintf("'${RED_NORM}'*** INSTANCE STOP        *** '${NORM}': %s",$0) }
+/terminating the instance/                                              { error=sprintf("'${RED_BOLD}'*** INSTANCE CRASH       *** '${NORM}': %s",$0) }
+/Background Media Recovery process shutdown/                            { error=sprintf("'${RED_BOLD}'*** REDO APPLY STOP      *** '${NORM}': %s",$0) }
+/Completed: ALTER DATABASE RECOVER MANAGED STANDBY DATABASE DISCONNECT/ { error=sprintf("'${GREEN_NO}'*** REDO APPLY     START *** '${NORM}': %s",$0) }
 {
   if ( test_print==1)
   {
@@ -72,7 +79,7 @@ BEGIN {jour="";test_print=0; error=""; nb=0;}
         prev_error=""
       }
       printf("  |          \n")
-      printf("  +---+-- %s\n",jour)
+      printf("  +---+-- %s ('$(hostname -s)')\n",jour)
       printf("  |   |\n")
     }
     if (error != "" )
