@@ -16,7 +16,7 @@ begin
     dbms_output.put_line('
 +---------------------------------------------------------------------------------------
 | Usage:
-|    reduceTablespace.sql [TSName] [MaxRunHours] [parallel] [online] [extents]
+|    reduceTablespace.sql [TSName] [MaxRunHours] [parallel] [online] [MoveToNew] [extents]
 |   
 |         after showing the datafiles uages and highwater mark, this script will  
 |   move segments having the highest block_id to save space.
@@ -41,12 +41,13 @@ begin
 |   a temporary log file is produced by the database to see what''s gonin on. The file
 |   is removed when the PL/SQL block ends
 |
-|   Parameters :
+|   Parameters (Positional, use "" to default them if needed):
 |       TSName          : Tablespace Name (if null, all non sys tablespaces)     - Default : NULL
 |       MaxRunHours     : delay after which the script will stop moving segments - Default : 1
-|       Parallel        : Degree of parallelism (for offline moves)              - Default : 32
-|       online          : ONLINE | OFFLINE                                       - Default : OFFLINE
-|       extents         : Number of move operations per tablespace               - Default : 500
+|       Parallel        : Degree of parallelism (for offline moves)              - Default : 8
+|       online          : ONLINE | OFFLINE                                       - Default : ONLINE
+|       MoveToNew       : Y|N (data is moved to TBS_NEW, created if non existant - Default : N
+|       extents         : Number of move operations per tablespace (-1=ALL)      - Default : -1
 |       
 +---------------------------------------------------------------------------------------
        ');
@@ -60,19 +61,62 @@ end ;
 -- ------------------------------------------------------------------------
 define      TSName="case when '&P1' is null then '.*'      else upper('&P1')     end"
 define MaxRunHours="case when '&P2' is null then 1         else to_number('&P2') end"
-define    Parallel="case when '&P3' is null then 32        else to_number('&P3') end"
-define      Online="case when '&P4' is null then 'OFFLINE' else upper('&P4')     end"
-define     extents="case when '&P5' is null then 500       else to_number('&P5') end"
+define    Parallel="case when '&P3' is null then 8         else to_number('&P3') end"
+define      Online="case when '&P4' is null then 'ONLINE'  else upper('&P4')     end"
+define   MoveToNew="case when '&P5' is null then 'N'       else upper('&P5')     end"
+define     extents="case when '&P6' is null then -1        else to_number('&P6') end"
+
+define spaceAnalysisBefore=Y
+define spaceAnalysisAfter=Y
+define runIt=true
 
 define RT_DIR='/tmp'
 set term off
 column RT_LOG new_value RT_LOG
 select 
   'reduceTablespace_' || to_char(sysdate,'yyyymmdd_hh24miss') || '.log' RT_LOG
+  --'reduceTablespace.log' RT_LOG
 from
   dual
 /
 set term on
+set serveroutput on
+declare
+  param_tablespace_name    varchar2(100) ;  -- Tablespace Selection (regexp)
+  param_max_run_time       number        ;  -- Number of Hours to run
+  param_parallel           number        ;  -- Degree of parallelism
+  param_online             varchar2(30)  ;  -- ONLINE/OFFLINE Processing
+  param_max_rows           number        ;  -- Number of lines (for tests)
+  param_real_time_log_dir  varchar2(100) ;  -- ORACLE DIR for the LOG (Created if non existent)
+  param_real_time_log_file varchar2(100) ;  -- Name of the temporary log (Removed at the end)
+  param_run_it             boolean       ;  -- If false, no move operation performed
+  param_move_to_new        boolean       ;
+begin
+  param_tablespace_name    := &TSName      ;
+  param_max_run_time       := &MaxRunHours ;
+  param_parallel           := &Parallel    ;
+  param_online             := &Online      ;
+  param_max_rows           := &extents     ;
+  param_real_time_log_dir  := '&RT_DIR'    ;
+  param_real_time_log_file := '&RT_LOG'    ;
+  param_run_it             := true         ;
+  param_move_to_new        := &moveToNew = 'Y' ;
+  null ;
+exception
+  when others
+  then
+    dbms_output.put_line ('Parameter type error:') ;
+    dbms_output.put_line ('====================') ;
+    dbms_output.put_line ('.    Tablespace Selection  : ' || case when '&P1' is null then '.*'       else '&P1' end ) ;
+    dbms_output.put_line ('.    Max Run Time          : ' || case when '&P2' is null then '1'        else '&P2' end ) ;
+    dbms_output.put_line ('.    Parallel              : ' || case when '&P3' is null then '8'        else '&P3' end ) ;
+    dbms_output.put_line ('.    Online                : ' || case when '&P4' is null then 'ONLINE'   else '&P4' end ) ;
+    dbms_output.put_line ('.    Move to new           : ' || case when '&P5' is null then 'N'        else '&P5' end ) ;
+    dbms_output.put_line ('.    Max Rows              : ' || case when '&P6' is null then '500'      else '&P6' end ) ;
+    raise ;
+end ;
+/
+
 
 prompt
 prompt =====================================================================
@@ -126,8 +170,8 @@ FROM
         GROUP BY
             file_id
     )  b ON a.file_id = b.file_id
---WHERE
---    ceil(blocks *(a.blocksize) / 1024 / 1024) - ceil((nvl(hwm, 1) *(a.blocksize)) / 1024 / 1024) > 100 /* Minimum MB it must shrink by to be considered. */
+WHERE
+  '&spaceAnalysisBefore' = 'Y'
 ORDER BY
     savings_gb DESC
 /
@@ -141,14 +185,15 @@ rem
 
 set serveroutput on 
 declare
-  param_tablespace_name    varchar2(100) := &TSName      ;  -- Tablespace Selection (regexp)
-  param_max_run_time       number        := &MaxRunHours ;  -- Number of Hours to run
-  param_parallel           number        := &Parallel    ;  -- Degree of parallelism
-  param_online             varchar2(30)  := &Online      ;  -- ONLINE/OFFLINE Processing
-  param_max_rows           number        := &extents     ;  -- Number of lines (for tests)
-  param_real_time_log_dir  varchar2(100) := '&RT_DIR'    ;  -- ORACLE DIR for the LOG (Created if non existent)
-  param_real_time_log_file varchar2(100) := '&RT_LOG'    ;  -- Name of the temporary log (Removed at the end)
-  param_run_it             boolean       := true         ;  -- If false, no move operation performed
+  param_tablespace_name    varchar2(100) := &TSName          ;  -- Tablespace Selection (regexp)
+  param_max_run_time       number        := &MaxRunHours     ;  -- Number of Hours to run
+  param_parallel           number        := &Parallel        ;  -- Degree of parallelism
+  param_online             varchar2(30)  := &Online          ;  -- ONLINE/OFFLINE Processing
+  param_move_to_new        boolean       := &moveToNew = 'Y' ;  -- Move to a new tablespace
+  param_max_rows           number        := &extents         ;  -- Number of lines (for tests)
+  param_real_time_log_dir  varchar2(100) := '&RT_DIR'        ;  -- ORACLE DIR for the LOG (Created if non existent)
+  param_real_time_log_file varchar2(100) := '&RT_LOG'        ;  -- Name of the temporary log (Removed at the end)
+  param_run_it             boolean       := &runIt           ;  -- If false, no move operation performed
 
   command varchar2(1000) ;
   
@@ -160,6 +205,7 @@ declare
   highest_block number ;
   previous_highest_block number ;
   initial_highest_block number ;
+  last_resize_highest_block number ;
   ora_log_dir varchar2(30) ;
   first_call boolean := true ;
   abort_loop boolean := false ;
@@ -168,6 +214,7 @@ declare
   free_before_hwm2 number ;
   free_after_hwm1 number ;
   free_after_hwm2 number ;
+  segments_count number ;
 
   function getOnlineClause return varchar2 is
   --
@@ -179,6 +226,10 @@ declare
            ) ;
   end ;
              
+  function getTablespaceClause ( t in varchar2 ) return varchar2 is
+  begin
+    return (case param_move_to_new when true then 'TABLESPACE ' || t end) ;
+  end ;
 
   function get_command(p_owner in varchar2,p_segment_name in varchar2 ,p_partition_name in varchar2
                       ,p_segment_type in varchar2,p_block_id in number ,dest_tablespace in varchar2) return varchar2 is
@@ -218,7 +269,8 @@ declare
       --
       -- Segment move statement generation
       --
-      tmp :=  'alter table ' || lp_table_owner || '.' || lo_table_name || ' move partition ' ||lp_partition_name ||
+      tmp :=  'alter table ' || lp_table_owner || '.' || lo_table_name || 
+              ' move partition ' ||lp_partition_name || ' ' || getTablespaceClause (dest_tablespace) || 
               ' lob(' || lo_column_name || ') store as (tablespace '|| dest_tablespace || ') ' || getOnlineClause ;
 
     elsif ( p_segment_type = 'LOBSEGMENT')
@@ -244,18 +296,21 @@ declare
         --
         tmp := tmp || '/* partitioned table */' ;
       else
-        tmp := 'alter table ' || p_owner || '.' || p_segment_name || ' move ' || getOnlineClause ;
+        tmp := 'alter table ' || p_owner || '.' || p_segment_name || 
+               ' move ' || getTablespaceClause(dest_tablespace) || ' ' ||getOnlineClause ;
       end if ;
 
     elsif (p_segment_type = 'TABLE PARTITION')
     then
         
-      tmp := 'alter table ' || p_owner || '.' || p_segment_name || ' move partition '|| p_partition_name ||' ' || getOnlineClause ;
+      tmp := 'alter table ' || p_owner || '.' || p_segment_name || 
+             ' move partition '|| p_partition_name || ' ' || getTablespaceClause(dest_tablespace) || ' ' || getOnlineClause ;
 
     elsif (p_segment_type = 'TABLE SUBPARTITION')
     then
 
-      tmp := 'alter table ' || p_owner || '.' || p_segment_name || ' move subpartition '|| p_partition_name ||' ' || getOnlineClause;
+      tmp := 'alter table ' || p_owner || '.' || p_segment_name || 
+             ' move subpartition '|| p_partition_name ||' ' || getOnlineClause;
 
     elsif (p_segment_type = 'INDEX')
     then
@@ -269,18 +324,21 @@ declare
       then
         tmp := tmp || '/* partitioned index */' ;
       else
-        tmp := 'alter index ' || p_owner || '.' || p_segment_name || ' rebuild ' || getOnlineClause;
+        tmp := 'alter index ' || p_owner || '.' || p_segment_name || 
+               ' rebuild ' || getTablespaceClause(dest_tablespace) || ' ' || getOnlineClause;
       end if ;
        
     elsif (p_segment_type = 'INDEX PARTITION')
     then
 
-      tmp := 'alter index ' || p_owner || '.' || p_segment_name || ' rebuild partition '|| p_partition_name ||' ' || getOnlineClause;
+      tmp := 'alter index ' || p_owner || '.' || p_segment_name || 
+             ' rebuild partition '|| p_partition_name ||' ' || getTablespaceClause(dest_tablespace) || ' ' || getOnlineClause;
 
     elsif (p_segment_type = 'INDEX SUBPARTITION')
     then
 
-      tmp := 'alter index ' || p_owner || '.' || p_segment_name || ' rebuild subpartition '|| p_partition_name ||' ' || getOnlineClause;
+      tmp := 'alter index ' || p_owner || '.' || p_segment_name || 
+             ' rebuild subpartition '|| p_partition_name ||' ' || getTablespaceClause(dest_tablespace) || ' ' || getOnlineClause;
 
     end if ;
 
@@ -424,8 +482,14 @@ declare
       end if ;
     exception
     when others then
-      message ('*** ERROR **  : ' || sqlerrm
-              ,'      +--> ',ts=>false);
+      if ( sqlcode = -2149 )
+      then
+        message ('Object already moved'
+                ,'      +--> ',ts=>false);
+      else
+        message ('*** ERROR **  : ' || sqlerrm
+                ,'      +--> ',ts=>false);
+      end if ;
     end ;
     end_stmt := systimestamp ;
     message (''
@@ -446,11 +510,60 @@ declare
     message ('',ts=>false);
   end ;
 
+  procedure checkOrCreateDestTS (old_ts in varchar2 ) is
+  -- If the new TS does not exists, create it and alter user quotas
+    new_ts varchar2(100) := old_ts || '_NEW' ;
+    dummy number ;
+  begin
+    message ('','',false) ;
+    message ('- Move to new = Yes, moving from ' || old_ts || ' to ' || new_ts ,'',false) ;
+    message ('  --------------------------------------------------------','',false) ;
+    message ('','',false) ;
+    message('Check existence of ' || new_ts || '...' 
+              ,' --+--> ');
+    begin
+      select  1
+      into    dummy
+      from    dba_tablespaces
+      where   tablespace_name = new_ts ;
+      message ('Exists'
+              ,'   |  > ',ts=>false);
+    exception
+      when no_data_found then
+        message ('Non existing TABLESPACE'
+                ,'   |  > ',ts=>false);
+        message (''
+                ,'   |  > ',ts=>false);
+        message ('Creating tablespace ' || new_ts 
+                ,'   +--+--> ',ts=>false);
+        run_sql('create bigfile tablespace ' || new_ts ) ;
+        message (''
+                ,'   |  > ',ts=>false);
+        message ('Set quotas'
+                ,'   +--+--> ',ts=>false);
+        for recQuotas in (select 'alter user ' || username || ' quota ' || 
+                                 case when MAX_BYTES = -1 then 'UNLIMITED' else to_char(MAX_BYTES) end || 
+                                 ' ON ' || new_ts command
+                          from   dba_ts_quotas
+                          where  tablespace_name = old_ts)
+        loop
+          run_sql(recQuotas.command) ;
+        end loop ;
+    end ;
+  end ;
+  
 -- -----------------------------------------------------------------------
 --                       M A I N   P R O G R A M 
 -- -----------------------------------------------------------------------
 
 begin
+  if param_max_rows = -1 
+  then
+    --
+    --    All rows (nearly ;-)
+    --
+    param_max_rows := 100000000 ;
+  end if ;
 
   --
   -- Create the directory or get the name of an existing one
@@ -475,6 +588,8 @@ begin
                ,80,' ') || '|',ts=>false) ;
   message (rpad('|  Parallel              : ' || param_parallel
                ,80,' ') || '|',ts=>false) ;
+  message (rpad('|  Move to new TS        : ' || case param_move_to_new when true then 'Yes' else 'No' end
+               ,80,' ') || '|',ts=>false) ;
   message (rpad('|  Maximun Extents       : ' || param_max_rows
                ,80,' ') || '|',ts=>false) ;
   message (rpad('|  Start Date            : ' || to_char(start_run,'dd/mm/yyyy hh24:mi:ss')
@@ -485,12 +600,16 @@ begin
   --
   --     Loop on the tablespaces depending on the criteria given (regexp format)
   --
-  for tablespaces in ( select tablespace_name 
-                             ,block_size
-                       from   dba_tablespaces
-                       where  regexp_like (tablespace_name,param_tablespace_name )
-                       and    tablespace_name not in ('SYSTEM','SYSAUX') 
-                       and    contents = 'PERMANENT' 
+  for tablespaces in ( select t.tablespace_name 
+                             ,t.block_size
+                             ,f.file_name
+                       from   dba_tablespaces t
+                       join   dba_data_files f on (t.tablespace_name = f.tablespace_name )
+                       where  regexp_like (t.tablespace_name,param_tablespace_name )
+                       and    t.tablespace_name not in ('SYSTEM','SYSAUX') 
+                       and    t.contents = 'PERMANENT' 
+                       and    t.tablespace_name not like '%NEW'
+                       and    t.bigfile = 'YES' /* This script has only been tested with BIGFILE tablespaces */
                        --and    1=2
                      )
   loop
@@ -502,11 +621,17 @@ begin
     message (rpad('|  Tablespace            : ' || tablespaces.tablespace_name
                            ,80,' ') || '|','    ',ts=>false) ;
     highest_block := getHighestBlock(tablespaces.tablespace_name) ;
+    last_resize_highest_block := highest_block ;
     previous_highest_block := highest_block ;
     initial_highest_block := highest_block ;
     message (rpad('|  Initial highest block : ' || fmt1(initial_highest_block)
                            ,80,' ') || '|','    ',ts=>false) ;
     message (rpad('+',80,'-') || '+','    ',ts=>false) ;
+
+    if param_move_to_new 
+    then
+      checkOrCreateDestTS (tablespaces.tablespace_name) ;
+    end if ;
 
     message ('','',false) ;
     message ('- Moving segments ...','',false) ;
@@ -520,6 +645,7 @@ begin
     -- the segment will be moved up (and the loop will exit, wasting a little 
     -- space.
     --
+    segments_count := 0 ;
     for extentsToMove in (
               with 
               high_segs as (
@@ -564,20 +690,20 @@ begin
         abort_loop := true ;
         exit ;
       end if ;
-
+      segments_count := segments_count + 1 ;
       
       message('Segment : ' || rpad(nvl(extentsToMove.owner ||'.'|| extentsToMove.segment_name ,' '),50) || rpad('('||nvl(extentsToMOve.segment_type,' ')||')',30) || '(block : ' ||extentsToMove.block_id || ')' 
               ,' --+--> ');
             
       command := get_command(extentsToMove.owner,extentsToMove.segment_name,extentsToMove.partition_name
                             ,extentsToMove.segment_type,extentsToMove.block_id
-                            ,tablespaces.tablespace_name);
+                            ,tablespaces.tablespace_name || case when param_move_to_new then '_NEW' else '' end);
 
       if (command is not null)
       then
         message (''
                 ,'   | ',ts=>false);
-        message ('Block : ' || fmt1(extentsToMove.block_id) --|| ' Last Extent Size: ' || fmt2(extent_size/1024/1024/1024) || 'GB'
+        message ('Block : ' || fmt1(extentsToMove.block_id) 
                 ,'   +--+--> ',ts=>false);
         message(''
                 ,'      |  > ',ts=>false);
@@ -596,12 +722,18 @@ begin
         highest_block := getHighestBlock(tablespaces.tablespace_name) ;
         message ('Highest Block : ' || fmt1(highest_block) || ' variation (' || (highest_block-previous_highest_block) || ')'
                 ,'         > ',ts=>false);
-        get_free_before_after('After move    : ','         > ',tablespaces.tablespace_name,highest_block,free_before_hwm2,free_after_hwm2) ;
-
+        if ( param_move_to_new and segments_count >= 25 )
+        then
+          --
+          --   Calculation HWM is very long
+          --
+          get_free_before_after('After move    : ','         > ',tablespaces.tablespace_name,highest_block,free_before_hwm2,free_after_hwm2) ;
+          segments_count := 0 ;
+        end if ;
         --
         -- This is an indication of the gain.
         --
-        message ('Variation     : ' || fmt2(free_after_hwm2 - free_after_hwm1) || ' GB'
+        message ('Variation     : ' || fmt2(free_after_hwm1 - free_after_hwm2) || ' GB'
                 ,'         > ',ts=>false);
 
         if ((highest_block-previous_highest_block) > 0)
@@ -613,6 +745,33 @@ begin
           exit ;
         end if ;
         previous_highest_block := highest_block ;
+
+       if (     param_move_to_new 
+            and ( (((last_resize_highest_block - highest_block)*tablespaces.block_size)/1024/1024/1024) > 500 ) 
+            and (highest_block > (1073741824)/tablespaces.block_size) 
+          )
+       then
+         --
+         -- We have gained 500 Gb, resize the datafile
+         --
+         declare
+           blocks_last_extent number ;
+         begin
+           select  blocks
+           into    blocks_last_extent
+           from    dba_extents
+           where   tablespace_name = tablespaces.tablespace_name and block_id = highest_block ;
+           message('','',false) ;
+           message('Resize datafile to ' || fmt2(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024) || 'GB'
+                  ,' --+--> ');
+           message(tablespaces.file_name
+                  ,'   |  > ');
+           run_sql ('alter database datafile '''|| tablespaces.file_name || 
+                    ''' resize ' || to_char(ceil(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024/100)*100) || ' G') ; 
+           message('','',false) ;
+           last_resize_highest_block := highest_block ;
+         end ;
+       end if ;
       else
         --
         -- no command
@@ -713,7 +872,7 @@ column current_size_gb          format 999G990D00     heading "Current Size (GB)
 column hwm_gb                   format 999G990D00     heading "Hwm (GB)"
 column savings_gb               format 999G990D00     heading "Possible Savings (GB)"
 column command                  format a200           heading "Resize Command"
-
+column test                     format a20
 break on report
 compute sum of current_size_gb on report
 comput sum of savings_gb on report
@@ -722,6 +881,7 @@ SELECT
     ceil(blocks *(a.blocksize) / 1024 / 1024 / 1024)                                                                               current_size_gb,
     ceil((nvl(hwm, 1) *(a.blocksize)) / 1024 / 1024 / 1024)                                                                        hwm_gb,
     ceil(blocks *(a.blocksize) / 1024 / 1024/1024) - ceil((nvl(hwm, 1) *(a.blocksize)) / 1024 / 1024/1024)                         savings_gb,
+    to_char(to_number(ceil(blocks *(a.blocksize) / 1024 / 1024) - ceil((nvl(hwm, 1) *(a.blocksize)) / 1024 / 1024))) test,
     'alter database datafile '''
     || file_name
     || ''' resize '
@@ -729,7 +889,7 @@ SELECT
     || 'm;'                                                                                                                        command
 FROM
     (
-        SELECT /*+PARALLEL*/
+        SELECT --/*+PARALLEL*/
             a.*,
             p.value blocksize
         FROM
@@ -737,7 +897,7 @@ FROM
             JOIN v$parameter p ON p.name = 'db_block_size'
     )  a
     LEFT JOIN (
-        SELECT /*+PARALLEL*/
+        SELECT -- /*+PARALLEL*/ do not work in 18c
             file_id,
             MAX(block_id + blocks - 1) hwm
         FROM
@@ -745,8 +905,8 @@ FROM
         GROUP BY
             file_id
     )  b ON a.file_id = b.file_id
-WHERE
-    ceil(blocks *(a.blocksize) / 1024 / 1024) - ceil((nvl(hwm, 1) *(a.blocksize)) / 1024 / 1024) > 100 /* Minimum MB it must shrink by to be considered. */
+WHERE '&spaceAnalysisAfter' = 'Y'
+AND   ceil(blocks *(a.blocksize) / 1024 / 1024) - ceil((nvl(hwm, 1) *(a.blocksize)) / 1024 / 1024) > 100 /* Minimum MB it must shrink by to be considered. */
 ORDER BY
     savings_gb DESC
 /
