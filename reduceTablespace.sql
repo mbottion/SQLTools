@@ -112,7 +112,7 @@ exception
     dbms_output.put_line ('.    Parallel              : ' || case when '&P3' is null then '8'        else '&P3' end ) ;
     dbms_output.put_line ('.    Online                : ' || case when '&P4' is null then 'ONLINE'   else '&P4' end ) ;
     dbms_output.put_line ('.    Move to new           : ' || case when '&P5' is null then 'N'        else '&P5' end ) ;
-    dbms_output.put_line ('.    Max Rows              : ' || case when '&P6' is null then '500'      else '&P6' end ) ;
+    dbms_output.put_line ('.    Max Rows              : ' || case when '&P6' is null then '-1'       else '&P6' end ) ;
     raise ;
 end ;
 /
@@ -215,6 +215,7 @@ declare
   free_after_hwm1 number ;
   free_after_hwm2 number ;
   segments_count number ;
+  nb_errors number := 0 ;
 
   function getOnlineClause return varchar2 is
   --
@@ -434,6 +435,7 @@ declare
   --
   function fmt1(n number) return varchar2 is begin return(to_char(n,'999G999G999G999G990')) ; end ;
   function fmt2(n number) return varchar2 is begin return(to_char(n,'999G990D00')) ; end ;
+  function fmt3(n number) return varchar2 is begin return(to_char(n,'999G999G990')) ; end ;
 
   procedure get_free_before_after(m in varchar2,i in varchar2,ts in varchar2,blk in number ,b in out number, a in out number) as
   --
@@ -486,7 +488,12 @@ declare
       then
         message ('Object already moved'
                 ,'      +--> ',ts=>false);
+      elsif ( sqlcode = -2327 )
+      then
+        message ('LOB Index, not rebuilt'
+                ,'      +--> ',ts=>false);
       else
+        nb_errors := nb_errors + 1 ;
         message ('*** ERROR **  : ' || sqlerrm
                 ,'      +--> ',ts=>false);
       end if ;
@@ -596,7 +603,6 @@ begin
                ,80,' ') || '|',ts=>false) ;
   message (rpad('+',80,'-') || '+',ts=>false) ;
   message ('',ts=>false);
-
   --
   --     Loop on the tablespaces depending on the criteria given (regexp format)
   --
@@ -692,7 +698,7 @@ begin
       end if ;
       segments_count := segments_count + 1 ;
       
-      message('Segment : ' || rpad(nvl(extentsToMove.owner ||'.'|| extentsToMove.segment_name ,' '),50) || rpad('('||nvl(extentsToMOve.segment_type,' ')||')',30) || '(block : ' ||extentsToMove.block_id || ')' 
+      message('Segment : ' || rpad(nvl(extentsToMove.owner ||'.'|| extentsToMove.segment_name ,' '),50) || rpad('('||nvl(extentsToMOve.segment_type,' ')||')',30) || '(# : ' || fmt3(segments_count) || ')' 
               ,' --+--> ');
             
       command := get_command(extentsToMove.owner,extentsToMove.segment_name,extentsToMove.partition_name
@@ -707,7 +713,15 @@ begin
                 ,'   +--+--> ',ts=>false);
         message(''
                 ,'      |  > ',ts=>false);
-        get_free_before_after('Before move   : ','      |  > ',tablespaces.tablespace_name,extentsToMove.block_id,free_before_hwm1,free_after_hwm1) ;
+
+        if ( not param_move_to_new or mod(segments_count,100) = 0)
+        then
+          --
+          --   Calculation HWM is very long, not really necessary at each segment 
+          -- when movin to a new tablespace
+          --
+          get_free_before_after('Before move   : ','      |  > ',tablespaces.tablespace_name,extentsToMove.block_id,free_before_hwm1,free_after_hwm1) ;
+        end if ;
 
 
         --
@@ -716,27 +730,39 @@ begin
         --
         run_sql (command) ;
 
-        --
-        --  Print new information about blocks and HWM
-        --
-        highest_block := getHighestBlock(tablespaces.tablespace_name) ;
-        message ('Highest Block : ' || fmt1(highest_block) || ' variation (' || (highest_block-previous_highest_block) || ')'
+        message ('Errors so far : ' || nb_errors 
                 ,'         > ',ts=>false);
-        if ( param_move_to_new and segments_count >= 25 )
+     
+        if ( nb_errors > 200 )
+        then
+          abort_message('Too many errors were found, aborting the script' ) ;
+          abort_loop := true ;
+          exit ;
+        end if ;
+
+        if ( not param_move_to_new or mod(segments_count,100) = 0)
         then
           --
-          --   Calculation HWM is very long
+          --   Calculation HWM is very long, so when moving to new TS, we do not
+          -- need to get it at each segment.
           --
-          get_free_before_after('After move    : ','         > ',tablespaces.tablespace_name,highest_block,free_before_hwm2,free_after_hwm2) ;
-          segments_count := 0 ;
-        end if ;
-        --
-        -- This is an indication of the gain.
-        --
-        message ('Variation     : ' || fmt2(free_after_hwm1 - free_after_hwm2) || ' GB'
-                ,'         > ',ts=>false);
 
-        if ((highest_block-previous_highest_block) > 0)
+          --
+          --  Print new information about blocks and HWM
+          --
+          highest_block := getHighestBlock(tablespaces.tablespace_name) ;
+          message ('Highest Block : ' || fmt1(highest_block) || ' variation (' || (highest_block-previous_highest_block) || ')'
+                  ,'         > ',ts=>false);
+
+          get_free_before_after('After move    : ','         > ',tablespaces.tablespace_name,highest_block,free_before_hwm2,free_after_hwm2) ;
+          --
+          -- This is an indication of the gain.
+          --
+          message ('Variation     : ' || fmt2(free_after_hwm1 - free_after_hwm2) || ' GB'
+                  ,'         > ',ts=>false);
+        end if ;
+
+        if (not param_move_to_new and ((highest_block-previous_highest_block) > 0))
         then
           --
           --    if the segment has been moved up, then we stop here for this tablespace
