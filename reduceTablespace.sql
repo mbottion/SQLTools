@@ -117,6 +117,7 @@ exception
 end ;
 /
 
+alter session set parallel_force_local=false ;
 
 prompt
 prompt =====================================================================
@@ -311,7 +312,7 @@ declare
     then
 
       tmp := 'alter table ' || p_owner || '.' || p_segment_name || 
-             ' move subpartition '|| p_partition_name ||' ' || getOnlineClause;
+             ' move subpartition '|| p_partition_name ||' ' || getTablespaceClause(dest_tablespace) || ' ' || getOnlineClause;
 
     elsif (p_segment_type = 'INDEX')
     then
