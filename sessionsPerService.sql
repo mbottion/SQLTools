@@ -38,6 +38,10 @@ column instance_number format 999 heading inst
 -- SQL
 -- -----------------------------------------------------------------
 
+Prompt
+Prompt      Historical Sessions
+Prompt      =========================================
+Prompt
 select distinct
    usr.username
   ,ash.instance_number
@@ -67,3 +71,33 @@ order by
 /
 
  
+Prompt
+Prompt      Current Sessions
+Prompt      =========================================
+Prompt
+
+break on inst_id on service_name on username 
+select distinct
+   sess.inst_id
+  ,sess.service_name
+  ,sess.username
+  ,sess.machine
+  ,sess.module
+  ,regexp_replace(
+     regexp_replace(
+       regexp_replace(
+          regexp_replace(sess.ACTION
+                        ,'_MV[0-9]*_(LIQ|TEC|SYN1|ACE1)[F12]*_','_')
+                     ,'_[0-9]*_JOB_TASKNUM[_0-9]*$','')
+                   ,'[0-9_]*$','')
+                 ,'(REFRESH_MV|PR_MERGE)_.*','\1') ACTION
+  ,to_char(sess.logon_time,'dd/mm/yyyy hh24:mi:ss') "Logon"
+from
+  gv$session  sess
+where 
+      sess.username not in (&excluded_users_list)
+  and sess.username not like '%ACCENTURE'
+order by
+  inst_id,service_name,username,machine
+/
+
