@@ -117,7 +117,7 @@ exception
 end ;
 /
 
-alter session set parallel_force_local=false ;
+rem alter session set parallel_force_local=false ;
 
 prompt
 prompt =====================================================================
@@ -195,6 +195,8 @@ declare
   param_real_time_log_dir  varchar2(100) := '&RT_DIR'        ;  -- ORACLE DIR for the LOG (Created if non existent)
   param_real_time_log_file varchar2(100) := '&RT_LOG'        ;  -- Name of the temporary log (Removed at the end)
   param_run_it             boolean       := &runIt           ;  -- If false, no move operation performed
+
+  const_check_space        number        := 10               ;  -- Check-space every X segments
 
   command varchar2(1000) ;
   
@@ -715,7 +717,7 @@ begin
         message(''
                 ,'      |  > ',ts=>false);
 
-        if ( not param_move_to_new or mod(segments_count,100) = 0)
+        if ( not param_move_to_new or mod(segments_count,const_check_space) = 0)
         then
           --
           --   Calculation HWM is very long, not really necessary at each segment 
@@ -741,7 +743,7 @@ begin
           exit ;
         end if ;
 
-        if ( not param_move_to_new or mod(segments_count,100) = 0)
+        if ( not param_move_to_new or mod(segments_count,const_check_space) = 0)
         then
           --
           --   Calculation HWM is very long, so when moving to new TS, we do not
