@@ -274,7 +274,7 @@ declare
       -- Segment move statement generation
       --
       tmp :=  'alter table ' || lp_table_owner || '.' || lo_table_name || 
-              ' move partition ' ||lp_partition_name || ' ' || getTablespaceClause (dest_tablespace) || 
+              ' move partition ' ||lp_partition_name || ' ' || 
               ' lob(' || lo_column_name || ') store as (tablespace '|| dest_tablespace || ') ' || getOnlineClause ;
 
     elsif ( p_segment_type = 'LOBSEGMENT')
@@ -647,6 +647,25 @@ begin
       checkOrCreateDestTS (tablespaces.tablespace_name) ;
     end if ;
 
+    if ( param_move_to_new )
+    then
+      message ('','',false) ;
+      message ('- Moving segments ...','',false) ;
+      message ('  -------------------','',false) ;
+      message ('','',false) ;
+
+      for recUnallocatedIndexes in (select 'begin  dbms_space_admin.materialize_deferred_segments(''' || table_owner || ''',''' || table_name || ''') ; end ; ' command
+                                    from dba_indexes i
+                                    where tablespace_name = tablespaces.tablespace_name
+                                    and   not exists (select 1 
+                                                      from   dba_segments s
+                                                      where  s.owner = i.owner 
+                                                      and    s.segment_name = i.index_name) )
+      loop
+        run_sql (recUnallocatedIndexes.command) ;
+      end loop ;
+    end if ;
+
     message ('','',false) ;
     message ('- Moving segments ...','',false) ;
     message ('  -------------------','',false) ;
@@ -848,8 +867,8 @@ begin
       end loop ;
 
       message ('','',false) ;
-      message ('- Move tables and indexes without segments ...','',false) ;
-      message ('  --------------------------------------------','',false) ;
+      message ('- Move tables and partitions without segments ...','',false) ;
+      message ('  -----------------------------------------------','',false) ;
       message ('','',false) ;
 
       for tNoSegs in (select 'alter table ' || t.owner || '.' || table_name || ' move tablespace ' || t.tablespace_name || '_NEW online ' command
@@ -859,20 +878,59 @@ begin
                                                               and t.table_name = s.segment_name
                                                               and s.segment_type = 'TABLE')
                                               and tablespace_name = tablespaces.tablespace_name
-                                              and partitioned = 'NO'
+                                              and partitioned = 'NO' 
                       UNION
-                      select 'alter index ' || t.owner || '.' || table_name || ' rebuild tablespace ' || t.tablespace_name || '_NEW online ;' 
-                      from dba_indexes t where     not exists (select 1 
-                                                              from dba_segments s
-                                                              where t.owner=s.owner 
-                                                              and t.table_name = s.segment_name
-                                                              and s.segment_type = 'TABLE')
-                                              and tablespace_name = 'TBS_BNA0PRD_LIQ1_ACTIVE'
-                                              and partitioned = 'NO' )
+                      select 'alter table ' || t.table_owner || '.' || table_name || ' move partition ' || t.partition_name || ' tablespace ' || t.tablespace_name || '_NEW online ' command
+                      from dba_tab_partitions t where not exists (select 1 
+                                                                  from dba_segments s
+                                                                  where t.table_owner=s.owner 
+                                                                  and t.table_name = s.segment_name
+                                                                  and t.partition_name = s.partition_name
+                                                                  and s.segment_type = 'TABLE PARTITION')
+                                                  and tablespace_name = tablespaces.tablespace_name 
+                                                  and composite = 'NO'
+                     UNION
+                     select 'alter table ' || lp.table_owner || '.' || lp.table_name || ' move partition ' || lp.partition_name ||
+                            ' lob ( ' || lp.column_name || ') store as ( tablespace ' || lp.tablespace_name || '_NEW ) online ' command
+                     from dba_lob_partitions lp where not exists (select 1
+                                                                  from dba_segments s
+                                                                  where lp.table_owner = s.owner 
+                                                                  and   lp.lob_name = s.segment_name
+                                                                  and   s.tablespace_name = lp.tablespace_name)
+                                                  and tablespace_name = tablespaces.tablespace_name
+                    )
       loop
         run_sql (tNoSegs.command) ;
       end loop ;
 
+      message ('','',false) ;
+      message ('- Change composite partitions attributes ...','',false) ;
+      message ('  ------------------------------------------','',false) ;
+      message ('','',false) ;
+
+      for recComp in (select 'alter table ' || t.table_owner || '.' || table_name || 
+                             ' modify default attributes for partition ' || t.partition_name || 
+                             ' tablespace ' || t.tablespace_name || '_NEW' command
+                      from dba_tab_partitions t where not exists (select 1
+                                                                  from dba_segments s
+                                                                  where t.table_owner=s.owner
+                                                                  and t.table_name = s.segment_name
+                                                                  and t.partition_name = s.partition_name
+                                                                  and s.segment_type = 'TABLE PARTITION')
+                                                and tablespace_name = tablespaces.tablespace_name
+                                                and composite = 'YES' 
+                      UNION
+                      select 'alter table ' || l.owner || '.' || l.table_name || ' modify default attributes ' ||
+                             ' lob ( ' || l.column_name || ') ( tablespace ' || l.tablespace_name || '_NEW) ' command
+                             from dba_lobs l where not exists (select 1
+                                                               from dba_segments s
+                                                               where l.owner = s.owner
+                                                               and   l.segment_name = s.segment_name
+                                                               and   l.tablespace_name = s.tablespace_name)
+                                             and tablespace_name = tablespaces.tablespace_name)
+      loop
+        run_sql(recComp.command) ;
+      end loop ;
     end if ; 
     --
     --     If we run OFFLINE, the indexes needs to be rebuilt, we do this on a 
