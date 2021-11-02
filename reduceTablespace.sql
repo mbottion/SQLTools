@@ -66,8 +66,8 @@ define      Online="case when '&P4' is null then 'ONLINE'  else upper('&P4')    
 define   MoveToNew="case when '&P5' is null then 'N'       else upper('&P5')     end"
 define     extents="case when '&P6' is null then -1        else to_number('&P6') end"
 
-define spaceAnalysisBefore=N
-define spaceAnalysisAfter=N
+define spaceAnalysisBefore=Y
+define spaceAnalysisAfter=Y
 define runIt=true
 
 define RT_DIR='/tmp'
@@ -196,7 +196,7 @@ declare
   param_real_time_log_file varchar2(100) := '&RT_LOG'        ;  -- Name of the temporary log (Removed at the end)
   param_run_it             boolean       := &runIt           ;  -- If false, no move operation performed
 
-  const_check_space        number        := 10               ;  -- Check-space every X segments
+  const_check_space        number        := 200              ;  -- Check-space every X segments
 
   command varchar2(1000) ;
   
@@ -219,7 +219,7 @@ declare
   free_after_hwm2 number ;
   segments_count number ;
   nb_errors number := 0 ;
-
+  err number := 0 ;
   function getOnlineClause return varchar2 is
   --
   --  Returns the ONLINE/PARALLEL clause for statements
@@ -453,22 +453,23 @@ declare
       ,a
     from (select /*+ PARALLEL(8) */ sum(bytes)/1024/1024/1024 gb_before
           from dba_free_space 
-          where tablespace_name='TBS_BNA0PRD_BNA_ACTIVE' 
+          where tablespace_name=ts
           and block_id < blk
          ) b
         ,(select  /*+ PARALLEL(8) */ sum(bytes)/1024/1024/1024 gb_after
           from dba_free_space 
-          where tablespace_name='TBS_BNA0PRD_BNA_ACTIVE' 
+          where tablespace_name=ts
           and block_id > blk
          ) a ;
      message(m || fmt1(b) || ' GB --> HWM <-- ' || fmt2(a) || ' GB'
             ,i,ts=>false) ;
   end ;
 
-  procedure run_sql(command in varchar2) is
+  function run_sql(command in varchar2) return number is
   --
   --  Run a SQL statement
   --
+    errCode number ;
   begin
     message ('Running :' || command
             ,'      |  > ',ts=>false);
@@ -479,21 +480,24 @@ declare
       if ( param_run_it )
       then
         execute immediate command ;
+        errCode:= sqlcode ;
         message ('Success'
                 ,'      +--> ',ts=>false);
       else
         message ('Test mode (command not ran)'
                 ,'      +--> ',ts=>false);
+        errCode := 0 ;
       end if ;
     exception
     when others then
+      errCode := sqlcode ;
       if ( sqlcode = -2149 )
       then
-        message ('Object already moved'
+        message ('Object already moved (-2149)'
                 ,'      +--> ',ts=>false);
       elsif ( sqlcode = -2327 )
       then
-        message ('LOB Index, not rebuilt'
+        message ('LOB Index, not rebuilt (-2327)'
                 ,'      +--> ',ts=>false);
       else
         nb_errors := nb_errors + 1 ;
@@ -506,6 +510,7 @@ declare
             ,'         > ',ts=>false);
     message ('Time          : ' || (end_stmt -start_stmt)
             ,'         > ',ts=>false);
+    return(errCode) ;
   end ;
 
   procedure abort_message(m in varchar2) is
@@ -524,6 +529,7 @@ declare
   -- If the new TS does not exists, create it and alter user quotas
     new_ts varchar2(100) := old_ts || '_NEW' ;
     dummy number ;
+    err number ;
   begin
     message ('','',false) ;
     message ('- Move to new = Yes, moving from ' || old_ts || ' to ' || new_ts ,'',false) ;
@@ -546,7 +552,7 @@ declare
                 ,'   |  > ',ts=>false);
         message ('Creating tablespace ' || new_ts 
                 ,'   +--+--> ',ts=>false);
-        run_sql('create bigfile tablespace ' || new_ts ) ;
+        err := run_sql('create bigfile tablespace ' || new_ts ) ;
         message (''
                 ,'   |  > ',ts=>false);
         message ('Set quotas'
@@ -557,12 +563,12 @@ declare
                           from   dba_ts_quotas
                           where  tablespace_name = old_ts)
         loop
-          run_sql(recQuotas.command) ;
+          err := run_sql(recQuotas.command) ;
         end loop ;
         for recDefTS in (select 'alter user ' || username || ' default tablespace ' || new_ts command
                          from   dba_users where default_tablespace = old_ts) 
         loop
-          run_sql(recDefTS.command) ;
+          err := run_sql(recDefTS.command) ;
         end loop ;
     end ;
   end ;
@@ -650,19 +656,31 @@ begin
     if ( param_move_to_new )
     then
       message ('','',false) ;
-      message ('- Moving segments ...','',false) ;
-      message ('  -------------------','',false) ;
+      message ('- Allocate extent to empty tables ...','',false) ;
+      message ('  -----------------------------------','',false) ;
       message ('','',false) ;
 
-      for recUnallocatedIndexes in (select 'begin  dbms_space_admin.materialize_deferred_segments(''' || table_owner || ''',''' || table_name || ''') ; end ; ' command
-                                    from dba_indexes i
-                                    where tablespace_name = tablespaces.tablespace_name
-                                    and   not exists (select 1 
-                                                      from   dba_segments s
-                                                      where  s.owner = i.owner 
-                                                      and    s.segment_name = i.index_name) )
+      --for recUnallocatedIndexes in (select 'begin  dbms_space_admin.materialize_deferred_segments(''' || table_owner || ''',''' || table_name || ''') ; end ; ' command
+      for recUnallocatedTables in  (select   'alter table ' || owner || '.' || table_name || ' allocate extent ' command
+                                    from     dba_tables t
+                                    where    tablespace_name = tablespaces.tablespace_name
+                                    and      not exists (select 1 
+                                                         from   dba_segments s
+                                                         where  s.owner = t.owner 
+                                                         and    s.segment_name = t.table_name) 
+                                    UNION
+                                    select   'alter table ' || table_owner || '.' || table_name || 
+                                             ' modify partition ' || partition_name || ' allocate extent ' command
+                                    from     dba_tab_partitions t
+                                    where    tablespace_name = tablespaces.tablespace_name
+                                    and      not exists (select 1
+                                                         from   dba_segments s
+                                                         where  s.owner = t.table_owner
+                                                         and    s.segment_name = t.table_name
+                                                         and    s.partition_name = t.partition_name) 
+                                   )
       loop
-        run_sql (recUnallocatedIndexes.command) ;
+        err := run_sql (recUnallocatedTables.command) ;
       end loop ;
     end if ;
 
@@ -705,6 +723,7 @@ begin
                   ,partition_name
                   ,segment_type
                   ,block_id
+                  ,lead (block_id,1) over (order by owner,segment_name,segment_type) next_block_id
               from 
                 high_segs 
          )
@@ -755,7 +774,14 @@ begin
         --   Run the statement, errors in the move operation are simply printed, they
         -- do not stop the execution
         --
-        run_sql (command) ;
+        err := run_sql (command) ;
+
+        if ( err in (-1450,-14808) )
+        then
+          message('Run the command Again OFFLINE mode'
+                  ,'      |  > ',ts=>false);
+          err := run_sql(replace (command,' ONLINE ',' ')) ;
+        end if ;
 
         message ('Errors so far : ' || nb_errors 
                 ,'         > ',ts=>false);
@@ -819,7 +845,7 @@ begin
                   ,' --+--> ');
            message(tablespaces.file_name
                   ,'   |  > ');
-           run_sql ('alter database datafile '''|| tablespaces.file_name || 
+           err := run_sql ('alter database datafile '''|| tablespaces.file_name || 
                     ''' resize ' || to_char(ceil(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024/100)*100) || ' G') ; 
            message('','',false) ;
            last_resize_highest_block := highest_block ;
@@ -840,6 +866,33 @@ begin
     --
     --    Print information on the tablespace (the new HWN should be lower than the initial one)
     --
+    highest_block := getHighestBlock(tablespaces.tablespace_name) ;
+    if (     param_move_to_new 
+         and ( (((last_resize_highest_block - highest_block)*tablespaces.block_size)/1024/1024/1024) > 500 ) 
+         and (highest_block > (1073741824)/tablespaces.block_size) 
+       )
+    then
+      --
+      -- We have gained 500 Gb, resize the datafile
+      --
+      declare
+        blocks_last_extent number ;
+      begin
+        select  blocks
+        into    blocks_last_extent
+        from    dba_extents
+        where   tablespace_name = tablespaces.tablespace_name and block_id = highest_block ;
+        message('','',false) ;
+        message('Resize datafile to ' || fmt2(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024) || 'GB'
+               ,' --+--> ');
+        message(tablespaces.file_name
+               ,'   |  > ');
+        err := run_sql ('alter database datafile '''|| tablespaces.file_name || 
+                 ''' resize ' || to_char(ceil(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024/100)*100) || ' G') ; 
+        message('','',false) ;
+        last_resize_highest_block := highest_block ;
+      end ;
+    end if ;
     message (rpad('+',80,'-') || '+','    ',ts=>false) ;
     message (rpad('|  Initial highest block : ' || fmt1(initial_highest_block)
                   ,80,' ') || '|','    ',ts=>false) ;
@@ -863,7 +916,7 @@ begin
                      join   dba_tables t on (t.table_name = m.container_name and t.owner = m.owner )
                      where   t.tablespace_name = tablespaces.tablespace_name )
       loop
-        run_sql(recMV.command) ;
+        err := run_sql(recMV.command) ;
       end loop ;
 
       message ('','',false) ;
@@ -900,7 +953,7 @@ begin
                                                   and tablespace_name = tablespaces.tablespace_name
                     )
       loop
-        run_sql (tNoSegs.command) ;
+        err := run_sql (tNoSegs.command) ;
       end loop ;
 
       message ('','',false) ;
@@ -929,7 +982,7 @@ begin
                                                                and   l.tablespace_name = s.tablespace_name)
                                              and tablespace_name = tablespaces.tablespace_name)
       loop
-        run_sql(recComp.command) ;
+        err := run_sql(recComp.command) ;
       end loop ;
     end if ; 
     --
@@ -964,7 +1017,7 @@ begin
       message('Rebuild : ' || rebuildCmds.owner || '.' || rebuildCmds.index_name || 
               case when rebuildCmds.partition_name is null then '' else '(Part : ' || rebuildCmds.partition_name || ')' end 
               ,' --+--> ');
-      run_sql(command) ;
+      err := run_sql(command) ;
     end loop ;
 
     --
