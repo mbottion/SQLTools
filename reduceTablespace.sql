@@ -66,8 +66,8 @@ define      Online="case when '&P4' is null then 'ONLINE'  else upper('&P4')    
 define   MoveToNew="case when '&P5' is null then 'N'       else upper('&P5')     end"
 define     extents="case when '&P6' is null then -1        else to_number('&P6') end"
 
-define spaceAnalysisBefore=Y
-define spaceAnalysisAfter=Y
+define spaceAnalysisBefore=N
+define spaceAnalysisAfter=N
 define runIt=true
 
 define RT_DIR='/tmp'
@@ -559,6 +559,11 @@ declare
         loop
           run_sql(recQuotas.command) ;
         end loop ;
+        for recDefTS in (select 'alter user ' || username || ' default tablespace ' || new_ts command
+                         from   dba_users where default_tablespace = old_ts) 
+        loop
+          run_sql(recDefTS.command) ;
+        end loop ;
     end ;
   end ;
   
@@ -826,6 +831,49 @@ begin
     message (rpad('+',80,'-') || '+','    ',ts=>false) ;
     message('',ts=>false) ;
 
+    if ( param_move_to_new )
+    then
+      message ('','',false) ;
+      message ('- Move materialized views ...','',false) ;
+      message ('  ---------------------------','',false) ;
+      message ('','',false) ;
+
+      for recMV in ( select 'alter materialized view ' || m.owner || '.' || m.mview_name || 
+                            ' move tablespace ' || tablespaces.tablespace_name || '_NEW' command  
+                     from   dba_mviews m
+                     join   dba_tables t on (t.table_name = m.container_name and t.owner = m.owner )
+                     where   t.tablespace_name = tablespaces.tablespace_name )
+      loop
+        run_sql(recMV.command) ;
+      end loop ;
+
+      message ('','',false) ;
+      message ('- Move tables and indexes without segments ...','',false) ;
+      message ('  --------------------------------------------','',false) ;
+      message ('','',false) ;
+
+      for tNoSegs in (select 'alter table ' || t.owner || '.' || table_name || ' move tablespace ' || t.tablespace_name || '_NEW online ' command
+                      from dba_tables t where     not exists (select 1 
+                                                              from dba_segments s
+                                                              where t.owner=s.owner 
+                                                              and t.table_name = s.segment_name
+                                                              and s.segment_type = 'TABLE')
+                                              and tablespace_name = tablespaces.tablespace_name
+                                              and partitioned = 'NO'
+                      UNION
+                      select 'alter index ' || t.owner || '.' || table_name || ' rebuild tablespace ' || t.tablespace_name || '_NEW online ;' 
+                      from dba_indexes t where     not exists (select 1 
+                                                              from dba_segments s
+                                                              where t.owner=s.owner 
+                                                              and t.table_name = s.segment_name
+                                                              and s.segment_type = 'TABLE')
+                                              and tablespace_name = 'TBS_BNA0PRD_LIQ1_ACTIVE'
+                                              and partitioned = 'NO' )
+      loop
+        run_sql (tNoSegs.command) ;
+      end loop ;
+
+    end if ; 
     --
     --     If we run OFFLINE, the indexes needs to be rebuilt, we do this on a 
     --  Tablespace basis. We could have put this after each move, but with the
@@ -843,6 +891,7 @@ begin
                          from dba_indexes 
                          where status='UNUSABLE' 
                          and   owner in (select username from dba_users where oracle_maintained = 'N')
+                         and   tablespace_name = tablespaces.tablespace_name
                          UNION
                          select index_owner
                                ,index_name,partition_name
@@ -850,6 +899,7 @@ begin
                          from dba_ind_partitions 
                          where status='UNUSABLE' 
                          and   index_owner in (select username from dba_users where oracle_maintained = 'N')
+                         and   tablespace_name = tablespaces.tablespace_name
                        )
     loop
       command := rebuildCmds.command || ' ' || getOnlineClause ;
