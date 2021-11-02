@@ -723,7 +723,6 @@ begin
                   ,partition_name
                   ,segment_type
                   ,block_id
-                  ,lead (block_id,1) over (order by owner,segment_name,segment_type) next_block_id
               from 
                 high_segs 
          )
