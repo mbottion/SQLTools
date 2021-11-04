@@ -66,8 +66,8 @@ define      Online="case when '&P4' is null then 'ONLINE'  else upper('&P4')    
 define   MoveToNew="case when '&P5' is null then 'N'       else upper('&P5')     end"
 define     extents="case when '&P6' is null then -1        else to_number('&P6') end"
 
-define spaceAnalysisBefore=Y
-define spaceAnalysisAfter=Y
+define spaceAnalysisBefore=N
+define spaceAnalysisAfter=N
 define runIt=true
 
 define RT_DIR='/tmp'
@@ -208,7 +208,6 @@ declare
   highest_block number ;
   previous_highest_block number ;
   initial_highest_block number ;
-  last_resize_highest_block number ;
   ora_log_dir varchar2(30) ;
   first_call boolean := true ;
   abort_loop boolean := false ;
@@ -391,8 +390,12 @@ declare
   --
     b number ;
   begin
-    select /*+ ALL_ROWS */ max(block_id) into b 
-    from dba_extents where tablespace_name = p_tablespace_name ;
+    begin
+      select /*+ ALL_ROWS */ max(block_id) into b 
+      from dba_extents where tablespace_name = p_tablespace_name ;
+    exception
+      when no_data_found then b := 1 ;
+    end ;
     return (nvl(b,0)) ;
   end ;
 
@@ -440,7 +443,7 @@ declare
   function fmt2(n number) return varchar2 is begin return(to_char(n,'999G990D00')) ; end ;
   function fmt3(n number) return varchar2 is begin return(to_char(n,'999G999G990')) ; end ;
 
-  procedure get_free_before_after(m in varchar2,i in varchar2,ts in varchar2,blk in number ,b in out number, a in out number) as
+  procedure get_free_before_after(m in varchar2,i in varchar2,l in varchar2 ,ts in varchar2,blk in number ,b in out number, a in out number) as
   --
   --  Get free space size before and after a given block (BIGFILE tablespaces)
   --
@@ -461,7 +464,7 @@ declare
           where tablespace_name=ts
           and block_id > blk
          ) a ;
-     message(m || fmt1(b) || ' GB --> HWM <-- ' || fmt2(a) || ' GB'
+     message(m || fmt1(b) || ' GB --> ['||l||'] <-- ' || fmt2(a) || ' GB'
             ,i,ts=>false) ;
   end ;
 
@@ -641,7 +644,6 @@ begin
     message (rpad('|  Tablespace            : ' || tablespaces.tablespace_name
                            ,80,' ') || '|','    ',ts=>false) ;
     highest_block := getHighestBlock(tablespaces.tablespace_name) ;
-    last_resize_highest_block := highest_block ;
     previous_highest_block := highest_block ;
     initial_highest_block := highest_block ;
     message (rpad('|  Initial highest block : ' || fmt1(initial_highest_block)
@@ -765,7 +767,13 @@ begin
           --   Calculation HWM is very long, not really necessary at each segment 
           -- when movin to a new tablespace
           --
-          get_free_before_after('Before move   : ','      |  > ',tablespaces.tablespace_name,extentsToMove.block_id,free_before_hwm1,free_after_hwm1) ;
+          get_free_before_after('Before move   : '
+                               ,'      |  > '
+                               ,extentsToMove.segment_name
+                               ,tablespaces.tablespace_name
+                               ,extentsToMove.block_id
+                               ,free_before_hwm1
+                               ,free_after_hwm1) ;
         end if ;
 
 
@@ -806,7 +814,14 @@ begin
           message ('Highest Block : ' || fmt1(highest_block) || ' variation (' || (highest_block-previous_highest_block) || ')'
                   ,'         > ',ts=>false);
 
-          get_free_before_after('After move    : ','         > ',tablespaces.tablespace_name,highest_block,free_before_hwm2,free_after_hwm2) ;
+          get_free_before_after('After move    : '
+                               ,'         > '
+                               ,'HWM'
+                               ,tablespaces.tablespace_name
+                               ,highest_block
+                               ,free_before_hwm2
+                               ,free_after_hwm2
+                               ) ;
           --
           -- This is an indication of the gain.
           --
@@ -825,12 +840,11 @@ begin
         previous_highest_block := highest_block ;
 
        if (     param_move_to_new 
-            and ( (((last_resize_highest_block - highest_block)*tablespaces.block_size)/1024/1024/1024) > 500 ) 
-            and (highest_block > (1073741824)/tablespaces.block_size) 
+            and ( free_after_hwm2 > 500 ) 
           )
        then
          --
-         -- We have gained 500 Gb, resize the datafile
+         -- There is more than 500 Gb free after HWM, resize the datafile
          --
          declare
            blocks_last_extent number ;
@@ -847,7 +861,6 @@ begin
            err := run_sql ('alter database datafile '''|| tablespaces.file_name || 
                     ''' resize ' || to_char(ceil(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024/100)*100) || ' G') ; 
            message('','',false) ;
-           last_resize_highest_block := highest_block ;
          end ;
        end if ;
       else
@@ -862,45 +875,6 @@ begin
     end loop ; -- Segment LOOP
 
 
-    --
-    --    Print information on the tablespace (the new HWN should be lower than the initial one)
-    --
-    highest_block := getHighestBlock(tablespaces.tablespace_name) ;
-    if (     param_move_to_new 
-         and ( (((last_resize_highest_block - highest_block)*tablespaces.block_size)/1024/1024/1024) > 500 ) 
-         and (highest_block > (1073741824)/tablespaces.block_size) 
-       )
-    then
-      --
-      -- We have gained 500 Gb, resize the datafile
-      --
-      declare
-        blocks_last_extent number ;
-      begin
-        select  blocks
-        into    blocks_last_extent
-        from    dba_extents
-        where   tablespace_name = tablespaces.tablespace_name and block_id = highest_block ;
-        message('','',false) ;
-        message('Resize datafile to ' || fmt2(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024) || 'GB'
-               ,' --+--> ');
-        message(tablespaces.file_name
-               ,'   |  > ');
-        err := run_sql ('alter database datafile '''|| tablespaces.file_name || 
-                 ''' resize ' || to_char(ceil(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024/100)*100) || ' G') ; 
-        message('','',false) ;
-        last_resize_highest_block := highest_block ;
-      end ;
-    end if ;
-    message (rpad('+',80,'-') || '+','    ',ts=>false) ;
-    message (rpad('|  Initial highest block : ' || fmt1(initial_highest_block)
-                  ,80,' ') || '|','    ',ts=>false) ;
-    message (rpad('|  Current highest block : ' || fmt1(highest_block)
-                 ,80,' ') || '|','    ',ts=>false) ;
-    message (rpad('|  Variation             : ' || fmt1(highest_block-initial_highest_block) || ' Blocks'
-                 ,80,' ') || '|','    ',ts=>false) ;
-    message (rpad('+',80,'-') || '+','    ',ts=>false) ;
-    message('',ts=>false) ;
 
     if ( param_move_to_new )
     then
@@ -1018,6 +992,50 @@ begin
               ,' --+--> ');
       err := run_sql(command) ;
     end loop ;
+
+    message ('','',false) ;
+    message ('- Final RESIZE ...','',false) ;
+    message ('  ----------------','',false) ;
+    message ('','',false) ;
+    --
+    --    Print information on the tablespace (the new HWN should be lower than the initial one)
+    --
+    highest_block := getHighestBlock(tablespaces.tablespace_name) ;
+    if (     param_move_to_new )
+    then
+      --
+      -- resize the datafile
+      --
+      declare
+        blocks_last_extent number ;
+      begin
+        begin
+          select  blocks
+          into    blocks_last_extent
+          from    dba_extents
+          where   tablespace_name = tablespaces.tablespace_name and block_id = highest_block ;
+        exception
+          when no_data_found then blocks_last_extent := 1 ;
+        end ;
+        message('','',false) ;
+        message('Resize datafile to ' || fmt2(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024) || 'GB'
+               ,' --+--> ');
+        message(tablespaces.file_name
+               ,'   |  > ');
+        err := run_sql ('alter database datafile '''|| tablespaces.file_name || 
+                 ''' resize ' || to_char(ceil(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024/100)*100) || ' G') ; 
+        message('','',false) ;
+      end ;
+    end if ;
+    message (rpad('+',80,'-') || '+','    ',ts=>false) ;
+    message (rpad('|  Initial highest block : ' || fmt1(initial_highest_block)
+                  ,80,' ') || '|','    ',ts=>false) ;
+    message (rpad('|  Current highest block : ' || fmt1(highest_block)
+                 ,80,' ') || '|','    ',ts=>false) ;
+    message (rpad('|  Variation             : ' || fmt1(highest_block-initial_highest_block) || ' Blocks'
+                 ,80,' ') || '|','    ',ts=>false) ;
+    message (rpad('+',80,'-') || '+','    ',ts=>false) ;
+    message('',ts=>false) ;
 
     --
     --    If time is up, the abort the loop
