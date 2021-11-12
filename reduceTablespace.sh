@@ -219,7 +219,9 @@ column command                  format a200           heading \"Resize Command\"
 column file_name                format a65            heading \"File\"
 break on report
 compute sum of current_size_gb on report
-comput sum of savings_gb on report
+compute sum of savings_gb on report
+set pages 1000
+set heading on
 
 SELECT 
     regexp_replace(file_name,'(^[^/]*)/.*/([^/]*$)','\1/ .. /\2') file_name,
