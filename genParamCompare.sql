@@ -69,16 +69,12 @@ select
    10 ord 
   , '      select null INST_ID ,null NAME,null VALUE,null VALUE_' || name || ' from dual where 1=2' a
   , 'UNION select null INST_ID ,null NAME,null VALUE,null VALUE_' || name || ' from dual where 1=2' b
---  ,'Name'
---  ,'Value@' || name
 from v$database
 UNION
 select /* Get parameters at PDB level */
    20 ord 
   ,'UNION select 9,name,value$,'''|| f.value$ || ' (' ||p.name||')'|| ''' from pdb_spfile$ where name = ''' || f.name ||  ''' and nvl(value$,''$$@@$$'') != nvl('''||f.value$||''',''$$@@$$'') and pdb_uid = (select con_uid from v$pdbs where name=nvl(upper(''!1''),''@X@'')) '  a
   ,'UNION select 9,'''||f.name||''',''  *** Not Set in PDB ***'','''|| f.value$ || ' (' ||p.name||')' || ''' from dual where not exists (select 1 from pdb_spfile$  where name = ''' || f.name || ''' and pdb_uid = (select con_uid from v$pdbs where name=nvl(upper(''!1''),''@X@'')))'  a
---  ,f.name
---  ,f.value$ || ' (' || p.name||')'
 from 
    pdb_spfile$ f
    join v$pdbs p on (f.pdb_uid = p.con_uid)
@@ -108,8 +104,6 @@ select /* Non Hidden parameters */
    20 ord 
   ,'UNION select inst_id,name,value || case isdefault when ''FALSE'' then '' (SPFILE)'' else null end,'''|| value || case isdefault when 'TRUE' then ' (Def)' else null end || ''' from gv$parameter where name = ''' || name || ''' and inst_id=' || inst_id || ' and (nvl(value,''$$@@$$'') != nvl('''||value||''',''$$@@$$'') or isdefault != '''||isdefault||''')'  a
   , '-- ----'
---  ,name
---  ,value || case isdefault when 'TRUE' then ' (Def)' else null end
 from 
   gv$parameter 
 where 
@@ -138,8 +132,6 @@ select /* Hidden parameters */
    30 ord 
   , 'UNION select inst_id,name,value || case isdefault when ''FALSE'' then '' (SPFILE)'' else null end,'''|| value || case isdefault when 'TRUE' then ' (Def)' else null end || ''' from gv$parameter where name = ''' || name || ''' and inst_id=' || inst_id || ' and nvl(value,''$$@@$$'') != nvl('''||value||''',''$$@@$$'') '  a
   , 'UNION select '||inst_id||','''||name||''',''  *** Not Set ***'','''|| value || ''' from dual where not exists (select 1 from gv$parameter  where name = ''' || name || ''' and inst_id=' || inst_id ||') '  a
---  ,name
---  ,value || case isdefault when 'TRUE' then ' (Def)' else null end
 from 
   gv$parameter 
 where 
@@ -168,7 +160,6 @@ select
    40 ord 
    , 'order by 2,1;'
    , null
---  ,null
---  ,null
 from dual
+order by 1
 /
