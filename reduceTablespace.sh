@@ -806,6 +806,7 @@ begin
                   ,block_id
               from 
                 high_segs
+              order by block_id desc
          )
     loop
       if (systimestamp > param_stop_date)
