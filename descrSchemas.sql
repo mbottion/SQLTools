@@ -29,7 +29,7 @@ set pause off
 set feed off
 col db_name        new_value db_name
 col owner          format a20 trunc
-col username       format a20
+col username       format a20 
 col table_name     format a30
 col index_name     format a30
 col partition_name format a30
