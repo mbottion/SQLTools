@@ -54,6 +54,8 @@ showVars()
   echo "  - pPARA=$pPARA"
   echo "  - pMODE=$pMODE"
   echo "  - pNEWTS=$pNEWTS"
+  echo "  - pTABLE=$pTABLE"
+  echo "  - pTABLE_Excluded=$pTABLE_Excluded"
   echo
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -62,11 +64,12 @@ showVars()
 startRun()
 {
   START_INTERM_EPOCH=$(date +%s)
+  START_INTERM_FMT=$(date +"%d/%m/%Y %H:%M:%S")
   echo   "========================================================================================" 
   echo   " Execution start"
   echo   "========================================================================================" 
   echo   "  - $1"
-  echo   "  - Started at     : $(date)"
+  echo   "  - Started at     : $START_INTERM_FMT"
   echo   "========================================================================================" 
   echo
 }
@@ -76,14 +79,16 @@ startRun()
 endRun()
 {
   END_INTERM_EPOCH=$(date +%s)
+  END_INTERM_FMT=$(date +"%d/%m/%Y %H:%M:%S")
   all_secs2=$(expr $END_INTERM_EPOCH - $START_INTERM_EPOCH)
   mins2=$(expr $all_secs2 / 60)
   secs2=$(expr $all_secs2 % 60 | awk '{printf("%02d",$0)}')
   echo
   echo   "========================================================================================" 
   echo   "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - "
-  echo   "  - Ended at      : $(date)" 
+  echo   "  - Ended at      : $END_INTERM_FMT" 
   echo   "  - Duration      : ${mins2}:${secs2}"
+  echo   "  - ForAnalysis   : $(basename $LOG_FILE);$pTABLE;$pTABLE_Excluded;;;;$START_INTERM_FMT;$END_INTERM_FMT"
   echo   "========================================================================================" 
   echo   "Script LOG in : $LOG_FILE"
   echo   "========================================================================================" 
@@ -204,26 +209,52 @@ usage()
 
 Usage :
  $SCRIPT -d database -p PDB [-T tablespace] [-R maxRun] [-P parallel] [-F] [-S] [-E extents]
+         [-U EACH|NEVER|END] -g
          [-h|-?]
-
-      Description of the script
 
          -d database       : Container database name         Default : None
          -p PDB Name       : Pluggable DB name               Default : None
          -T tablespace     : Tablespaces to process (regexp) Default : ALL
-         -t segment        : Segment Name                    Default : %
+         -t segment        : Segment Name to include (RE)    Default : .* (ie: \"(T1.*|T2.*)\")
+         -x segment        : Segment Name to exclude (RE)    Default : NONE
          -R maxRun         : maximum run time allowed        Default : 1 Hour
          -P parallel       : Degree of parallelism           Default : 8
-         -F                : DO the moves OFFLINE            Default : ONLINE
+         -F                : Do the moves OFFLINE            Default : ONLINE
          -S                : Move to same tablespace         Default : New tablespace       
          -E extents        : Process only the first extents  Delault : -1 (All)
+         -U when           : When to rebuild indexes         Default : END
          -g                : Generate script only
-         -?|-h        : Help
+         -?|-h             : Help
 
+  Segments are processed by highest extent's block id to free space at the end of the datafile.
+  If segment name is given, blocks may exist above and space cannot be freed.
+
+  Segments can be moved to the same (-S) tablespace or to a new one. In that case, if the '_NEW' tablespace
+  does not exists, it is created (bigfile) with the same characteristics than the old one. Old
+  tablespace is not dropped at the end.
+ 
+  ONLINE Move (very long) : Processing will end after (-R) hours, no more segments, 200 errors or (-E)
+                            segments processed. Free space at the top of the datafile
+                            space is checked evrery 20 segments.  Indexes remain valid.
+
+  OFFLINE Move            : Processing will end after (-R) hours, no more segments,200 errors or (-E)
+                            segments processed or if a segment has been moved above its 
+                            initial placement.  Space is checked after each move in the main loop.
+
+                            Unusable indexes rebuild is controlled by (-U), they are rebuilt after EACH
+                            table move (multiple rebuilds, but less unusable indexes), or at the END of
+                            the processing. When multiple scripts are runnin in parallel use NEVER for
+                            all but one and END for the LONGEST one.
+
+  Space checking          : If space above HWM is greater than 200 Gb, the datafile is
+                            resized to free space.
   Version : $VERSION
-  "
+  " | more
   exit
 }
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+#  Print size of datafiles and commands to resize them
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 analyzeSpace()
 {
   RESIZE_COMMAND=""
@@ -269,7 +300,7 @@ FROM
             JOIN v\$parameter p ON p.name = 'db_block_size'
     )  a
     LEFT JOIN (
-        SELECT /*+PARALLEL*/
+        SELECT /*+ opt_param('_smm_auto_cost_enabled','false') */
             file_id,
             MAX(block_id + blocks - 1) hwm
         FROM
@@ -282,6 +313,9 @@ ORDER BY
 /
   "
 }
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Move segments, this is the main processing part, in fact, a PL/SQL block!
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 moveObjects()
 {
   callNumber=$1
@@ -291,8 +325,13 @@ alter session set container=$pPDB ;
 set term on
 REM set serveroutput on size unlimited
 declare
+
+  -- 
+  --   Parameters redefined from the main shell values
+  --
   param_tablespace_name    varchar2(100) := '$pTBS'                                          ;  -- Tablespace Selection (regexp)
-  param_table              varchar2(100) := '$pTABLE'                                        ;  -- Table
+  param_table              varchar2(500) := '$pTABLE'                                        ;  -- Included Table
+  param_table_excluded     varchar2(500) := '$pTABLE_Excluded'                               ;  -- Excluded Table
   param_stop_date          date          :=  to_date('$pSTOPDATE','dd/mm/yyyy hh24:mi:ss')   ;  -- Number of Hours to run
   param_parallel           number        :=  $pPARA                                          ;  -- Degree of parallelism
   param_online             varchar2(30)  := '$pMODE'                                         ;  -- ONLINE/OFFLINE Processing
@@ -301,44 +340,46 @@ declare
   param_real_time_log_dir  varchar2(100) := '$RT_DIR'                                        ;  -- ORACLE DIR for the LOG (Created if non existent)
   param_real_time_log_file varchar2(100) := '$RT_LOG'                                        ;  -- Name of the temporary log (Removed at the end)
   param_run_it             boolean       :=  $run_it                                         ;  -- If false, no move operation performed
-  param_genonly            varchar2(10)  := '$pGENONLY'                                      ;
-  param_use_parallel_WA    varchar2(10)  := '$useParallelismWA'                              ;
+  param_genonly            varchar2(10)  := '$pGENONLY'                                      ;  -- Only print the statements
+  param_use_parallel_WA    varchar2(10)  := '$useParallelismWA'                              ;  -- Use a WA to have move running in parallel
+  param_rebuild            varchar2(10)  := upper('$pRebuild')                               ;  -- When to rebuild indexes
 
-  const_check_space        number        := 20                                               ;  -- Check-space every X segments
-  const_space_treeshold    number        := 250                                              ;  -- If HWM has decreased of more than this, reduce the file
+  const_check_space        number        := 10                                               ;  -- Check-space every X segments
+  const_space_treeshold    number        := 100                                              ;  -- If HWM has decreased of more than this, reduce the file
   
-  command varchar2(1000) ;
+  command varchar2(1000)                        ;
   
-  start_run  timestamp ;
-  end_run    timestamp ;
-  start_stmt timestamp ;
-  end_stmt   timestamp ;
-  start_move timestamp ;
-  end_move   timestamp ;
+  start_run  timestamp                          ;
+  end_run    timestamp                          ;
+  start_stmt timestamp                          ;
+  end_stmt   timestamp                          ;
+  start_move timestamp                          ;
+  end_move   timestamp                          ;
   
-  highest_block number ;
-  previous_highest_block number ;
-  initial_highest_block number ;
-  ora_log_dir varchar2(30) ;
-  first_call boolean := true ;
-  abort_loop boolean := false ;
-  extent_size number ;
-  free_before_hwm1 number ;
-  free_before_hwm2 number ;
-  free_after_hwm1 number ;
-  free_after_hwm2 number ;
-  segments_count number ;
-  nb_errors number := 0 ;
-  err number := 0 ;
+  highest_block number                          ;
+  previous_highest_block number                 ;
+  initial_highest_block number                  ;
+  ora_log_dir varchar2(30)                      ;
+  first_call boolean := true                    ;
+  abort_loop boolean := false                   ;
+  extent_size number                            ;
+  free_before_hwm1 number                       ;
+  free_before_hwm2 number                       ;
+  free_after_hwm1 number                        ;
+  free_after_hwm2 number                        ;
+  segments_count number                         ;
+  nb_errors number := 0                         ;
+  err number := 0                               ;
   
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
+  --  Returns the ONLINE/PARALLEL clause for statements
   --
   -- -----------------------------------------------------------------------------------------
   --
   
   function getOnlineClause return varchar2 is
-  --
-  --  Returns the ONLINE/PARALLEL clause for statements
-  --
   begin
     return (case param_online   when 'ONLINE' then 'ONLINE' else ''                            end  || ' ' ||
             case param_parallel when 1        then ''       else 'parallel ' || param_parallel end
@@ -352,25 +393,24 @@ declare
   --
   -- -----------------------------------------------------------------------------------------
   --
+  --     Genrerates the MOVE comment depending on the object type this function generates
+  --  move statements for all objects types.
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
   function get_command(p_owner in varchar2,p_segment_name in varchar2 ,p_partition_name in varchar2
                       ,p_segment_type in varchar2,p_block_id in number ,dest_tablespace in varchar2) return varchar2 is
-  --
-  --  Genrerates the MOVE comment depending on the object type
-  --
   tmp varchar2(2000) := '' ; 
     
-  lp_table_owner        dba_lob_partitions.table_owner%type ;
-  lp_table_name         dba_lob_partitions.table_name%type ;
-  lp_partition_name     dba_lob_partitions.partition_name%type ;
-  lp_lob_partition_name dba_lob_partitions.lob_partition_name%type ;
-  lp_lob_name           dba_lob_partitions.lob_name%type ;
-       
-  in_partitioned        dba_indexes.partitioned%type ;
-            
-  ta_partitioned        dba_tables.partitioned%type ;
-                  
-  lo_table_name         dba_lobs.table_name%type ;
-  lo_column_name        dba_lobs.column_name%type ;
+  lp_table_owner        dba_lob_partitions.table_owner%type                    ;
+  lp_table_name         dba_lob_partitions.table_name%type                     ;
+  lp_partition_name     dba_lob_partitions.partition_name%type                 ;
+  lp_lob_partition_name dba_lob_partitions.lob_partition_name%type             ;
+  lp_lob_name           dba_lob_partitions.lob_name%type                       ;
+  in_partitioned        dba_indexes.partitioned%type                           ;
+  ta_partitioned        dba_tables.partitioned%type                            ;
+  lo_table_name         dba_lobs.table_name%type                               ;
+  lo_column_name        dba_lobs.column_name%type                              ;
                   
   begin
     if ( p_segment_type = 'LOB PARTITION')
@@ -475,10 +515,13 @@ declare
   --
   -- -----------------------------------------------------------------------------------------
   --
+  --   Print a formatted message with date, and logs the message to a file to be able
+  -- to follow execution. A directory has been created at the begininng to point
+  -- to /tmp
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
   procedure message(m in varchar2,indent in varchar2 default ' ',ts in boolean default true ,alwaysPrint boolean default false) is
-  --
-  --   Print a formatted message with date
-  --
     dat varchar2(30) := to_char(current_timestamp,'dd/mm/yyyy hh24:mi:ss.FF3') ;
     mess varchar2(2000) ;
     fh utl_file.file_type ;
@@ -509,15 +552,16 @@ declare
   --
   -- -----------------------------------------------------------------------------------------
   --
-  function getHighestBlock (p_tablespace_name in varchar2) return number is
-  --
   -- Get the last block of a tablespace (works only for BIGFILE tablespaces)
   --
+  -- -----------------------------------------------------------------------------------------
+  --
+  function getHighestBlock (p_tablespace_name in varchar2) return number is
     b number ;
   begin
     if ( param_genonly = 'Y' ) then return 0 ; end if ;
     begin
-      select /*+ ALL_ROWS */ max(block_id) into b 
+      select /*+ opt_param('_smm_auto_cost_enabled','false') */  max(block_id) into b 
       from dba_extents where tablespace_name = p_tablespace_name ;
     exception
       when no_data_found then b := 1 ;
@@ -527,11 +571,12 @@ declare
   --
   -- -----------------------------------------------------------------------------------------
   --
-  function createDir(physical_dir in varchar2) return varchar2 as
-  --
   --    Create the directory, if an existing directory points to the same
   -- physical path, use it.
   --
+  -- -----------------------------------------------------------------------------------------
+  --
+  function createDir(physical_dir in varchar2) return varchar2 as
     dn varchar2(30) ;
   begin
     message('Create real time log dir'
@@ -576,10 +621,11 @@ declare
   --
   -- -----------------------------------------------------------------------------------------
   --
-  procedure get_free_before_after(m in varchar2,i in varchar2,l in varchar2 ,ts in varchar2,blk in number ,b in out number, a in out number) as
-  --
   --  Get free space size before and after a given block (BIGFILE tablespaces)
   --
+  -- -----------------------------------------------------------------------------------------
+  --
+  procedure get_free_before_after(m in varchar2,i in varchar2,l in varchar2 ,ts in varchar2,blk in number ,b in out number, a in out number) as
   begin
     select
        b.gb_before
@@ -600,6 +646,11 @@ declare
      message(m || fmt1(b) || ' GB --> ['||l||'] <-- ' || fmt2(a) || ' GB'
             ,i,ts=>false) ;
   end ;
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
+  --      Run the statement in a SQLPLUS session launched via a scheduled job, this is a 
+  -- workaround to have the ONLINE statements running in parallel.
   --
   -- -----------------------------------------------------------------------------------------
   --
@@ -634,7 +685,7 @@ declare
         where job_name = l_job_name
         and   state in ('RUNNING','SCHEDULED','RETRY SCHEDULED') ;
       exception when no_data_found then 
-        dbms_lock.sleep(10) ;
+        dbms_lock.sleep(2) ;
         finished := true ;
       end;
     end loop;
@@ -672,10 +723,11 @@ declare
   --
   -- -----------------------------------------------------------------------------------------
   --
-  function run_sql(command in varchar2,use_sqlplus boolean default false,comments in varchar2 default null) return number is
-  --
   --  Run a SQL statement
   --
+  -- -----------------------------------------------------------------------------------------
+  --
+  function run_sql(command in varchar2,use_sqlplus boolean default false,comments in varchar2 default null) return number is
     errCode number := 0 ;
     errMessage varchar2(2000) ;
   begin
@@ -742,6 +794,10 @@ declare
   --
   -- -----------------------------------------------------------------------------------------
   --
+  --     Wrapper of run_sql() to launch via sqlplus
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
   function run_via_sqlplus ( c in varchar2,comments in varchar2 default null) return number is
   begin
     return run_sql(c,use_sqlplus => true ,comments=>comments) ;
@@ -749,10 +805,11 @@ declare
   --
   -- -----------------------------------------------------------------------------------------
   --
-  procedure abort_message(m in varchar2) is
-  --
   --  Print a visible abord message
   --
+  -- -----------------------------------------------------------------------------------------
+  --
+  procedure abort_message(m in varchar2) is
   begin
     message ('',ts=>false);
     message (rpad('*',90,'*'),ts=>false);
@@ -760,6 +817,11 @@ declare
     message (rpad('*',90,'*'),ts=>false);
     message ('',ts=>false);
   end ;
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
+  --       Check if the destination tablespace exists or create it with same access
+  -- rights than the old one
   --
   -- -----------------------------------------------------------------------------------------
   --
@@ -810,6 +872,151 @@ declare
         end loop ;
     end ;
   end ;
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
+  --      For move or rebuild statements, we use this instead of run_sql() to be able
+  -- to easily apply the WA.
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
+  function run_sql_for_move(cmd in varchar2, comm in varchar2 ) return number is
+    err number ;
+  begin
+    if ( param_use_parallel_WA = 'Y' )
+    then
+      --
+      --    Workaround to have the full parallelism capabilities
+      -- Alter table move don't run in parallel when called from PL/SQL
+      --
+      err := run_via_sqlplus (cmd,comm) ;
+    else
+      err := run_sql (command) ;
+    end if ;
+    return (err) ;
+  end ;
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
+  --      Rebuild all unusable indexes in a tablespace
+  --
+  -- -----------------------------------------------------------------------------------------
+  --
+  function rebuildUnusableIndexes(tbs in varchar2,dest_tablespace in varchar2) return number is
+    command varchar2(2000) ; 
+    final_err number := 0;
+  begin
+          --
+          --     If we run OFFLINE, the indexes needs to be rebuilt, we do this on a 
+          --  Tablespace basis. 
+          -- 
+          message ('','',false) ;
+          message ('- Rebuilding UNUSABLE Indexes ...','',true) ;
+          message ('  -------------------------------','',false) ;
+          message ('','',false) ;
+          dbms_application_info.set_action('Rebuilding UNUSABLE Indexes') ;
+      
+          for rebuildCmds in (with unusable_obj as (SELECT owner                                                      segment_owner 
+                                                          ,index_name                                                 segment_name
+                                                          ,'INDEX'                                                    segment_type
+                                                          ,''                                                         partition_name
+                                                          ,'alter index ' || owner || '.' || index_name || ' rebuild' command
+                                                    FROM  dba_indexes i
+                                                    WHERE status            = 'UNUSABLE'
+                                                    AND   owner IN (SELECT username
+                                                                    FROM   dba_users
+                                                                    WHERE  oracle_maintained   = 'N' )
+                                                    AND   tablespace_name   in ( tbs , tbs || '_NEW' )
+                                                    UNION
+                                                    SELECT   index_owner
+                                                           ,'INDEX PARTITION'
+                                                           ,index_name
+                                                           ,partition_name
+                                                           ,'alter index ' || index_owner || '.' || index_name || ' rebuild partition ' || partition_name
+                                                    FROM   dba_ind_partitions
+                                                    WHERE  status            = 'UNUSABLE'
+                                                    AND    index_owner IN (SELECT username
+                                                                           FROM   dba_users
+                                                                           WHERE  oracle_maintained   = 'N')
+                                                    AND    tablespace_name   in ( tbs , tbs || '_NEW' ))
+                              select 
+                                 o.segment_owner
+                                ,o.segment_name
+                                ,o.segment_type
+                                ,o.partition_name
+                                ,o.command
+                                ,s.bytes / 1024 / 1024 / 1024 size_GB
+                              from  
+                                unusable_obj o
+                              left join dba_segments s on (    s.owner = o.segment_owner
+                                                           and s.segment_name = o.segment_name
+                                                           and nvl(s.partition_name,'##NONE##') =  nvl(o.partition_name,'##NONE##') )
+                              where
+                                      regexp_like(s.segment_name,upper(param_table)) 
+                              and not regexp_like(s.segment_name, upper(param_table_excluded))
+                             )
+          loop
+            declare 
+              dummy number ;
+            begin
+              --
+              --      Test if the object is still unusable since several scripts can run at the
+              --  same time.
+              --
+              if (rebuildCmds.segment_type = 'INDEX' )
+              then
+                select 1 
+                into   dummy
+                from   dba_indexes
+                where  owner=rebuildCmds.segment_owner
+                and    index_name = rebuildCmds.segment_name
+                and    status='UNUSABLE'
+                and    rownum = 1 ;
+              else
+                select 1 
+                into   dummy
+                from   dba_ind_partitions
+                where  index_owner=rebuildCmds.segment_owner
+                and    index_name = rebuildCmds.segment_name
+                and    partition_name = rebuildCmds.partition_name
+                and    status='UNUSABLE'
+                and    rownum = 1 ;
+              end if ;
+              command := rebuildCmds.command || ' ' || getTablespaceClause(dest_tablespace) || ' ' || getOnlineClause ;
+              message('Rebuild : ' || rebuildCmds.segment_owner || '.' || rebuildCmds.segment_name || 
+                      case when rebuildCmds.partition_name is null then '' else '(Part : ' || rebuildCmds.partition_name || ')' end 
+                      ,' --+--> ');
+              start_move := systimestamp ;
+              err := run_sql_for_move(command,'Rebuild UNUSABLE ' || rebuildCmds.segment_name||  ' (' ||rebuildCmds.partition_name || ')') ;
+              end_move := systimestamp ;
+
+              if ( err != 0 ) then nb_errors := nb_errors + 1 ; end if ;
+
+              message('##SUMMARY##' || 'REBUILD' || ';' ||
+                                       rebuildCmds.segment_type || ';' ||
+                                       rebuildCmds.segment_name || ';' ||
+                                       rebuildCmds.partition_name || ';' ||
+                                       replace(to_char(rebuildCmds.size_gb),'.',',')  || ';' ||
+                                       to_char(start_move,'dd/mm/yyyy hh24:mi:ss') || ';' ||
+                                       to_char(end_move,'dd/mm/yyyy hh24:mi:ss') || ';' ||
+                                       (end_move-start_move) || ';' ||
+                                       err,'',false) ;
+              if ( rebuildCmds.segment_type in ('INDEX') )
+              then
+                message('Reset PARALLEL to 1'
+                        ,'      |  > ',ts=>false);
+                err := run_sql('alter ' ||  rebuildCmds.segment_type || ' ' || rebuildCmds.segment_owner || '.' || rebuildCmds.segment_name || ' PARALLEL 1') ;
+                if ( err != 0 ) then final_err := err ; end if ;
+              end if ;
+           exception
+           when no_data_found then
+              message('Rebuild : ' || rebuildCmds.segment_owner || '.' || rebuildCmds.segment_name || 
+                      case when rebuildCmds.partition_name is null then '' else '(Part : ' || rebuildCmds.partition_name || ')' end  || ' --> No more Nesessary'
+                      ,' --+--> ');
+           end ;
+          end loop ;
+          return (final_err) ;
+  end ;
   
 -- -----------------------------------------------------------------------
 --                       M A I N   P R O G R A M 
@@ -835,42 +1042,48 @@ begin
   -- Create the directory or get the name of an existing one
   --
   ora_log_dir := createDir(param_real_time_log_dir) ;
-  message('','',ts=>false);
+  message('','',ts=>false,alwaysPrint=>true);
 
   start_run := systimestamp ;
   
   --
   -- Prints the parameters of this run
   --
-  message (rpad('+',80,'-') || '+',ts=>false) ;
+  message (rpad('+',80,'-') || '+',ts=>false,alwaysPrint=>true) ;
   message (rpad('|          Move upper extents down in the tablespace'
-               ,80,' ') || '|',ts=>false) ;
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
   message (rpad('+',80,'-') || '+',ts=>false) ;
   message (rpad('|  Tablespace Selection  : ' || param_tablespace_name
-               ,80,' ') || '|',ts=>false) ;
-  message (rpad('|  Tablespace Selection  : ' || param_table || '%'
-               ,80,' ') || '|',ts=>false) ;
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
+  message (rpad('|  Table Selection       : ' || param_table 
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
+  message (rpad('|  Table exclusion       : ' || param_table_excluded 
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
+  message (rpad('|  Rebuild INDEXES       : ' || param_rebuild
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
   message (rpad('|  Stop Date             : ' || to_char(param_stop_date,'dd/mm/yyyy hh24:mi:ss') 
-               ,80,' ') || '|',ts=>false) ;
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
   message (rpad('|  Max run duration      : ' || to_char((param_stop_date-cast(start_run as date))*24,'990D99') || ' Hours'
-               ,80,' ') || '|',ts=>false) ;
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
   message (rpad('|  Online/Offline        : ' || param_online
-               ,80,' ') || '|',ts=>false) ;
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
   message (rpad('|  Parallel              : ' || param_parallel
-               ,80,' ') || '|',ts=>false) ;
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
   message (rpad('|  Move to new TS        : ' || case param_move_to_new when true then 'Yes' else 'No' end
-               ,80,' ') || '|',ts=>false) ;
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
   message (rpad('|  Maximun Extents       : ' || param_max_rows
-               ,80,' ') || '|',ts=>false) ;
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
   message (rpad('|  Start Date            : ' || to_char(start_run,'dd/mm/yyyy hh24:mi:ss')
-               ,80,' ') || '|',ts=>false) ;
-  message (rpad('+',80,'-') || '+',ts=>false) ;
-  message ('',ts=>false);
+               ,80,' ') || '|',ts=>false,alwaysPrint=>true) ;
+  message (rpad('+',80,'-') || '+',ts=>false,alwaysPrint=>true) ;
+  message ('',ts=>false,alwaysPrint=>true);
 
   dbms_application_info.set_client_info('Move Tablespaces ($SCRIPT)') ;
-  message('##SUMMARY##' || 'Segment Type' || ';' ||
+  message('##SUMMARY##' || 'Operation' || ';' ||
+                           'Segment Name' || ';' ||
                            'Segment Name' || ';' ||
                            'Partition Name' || ';' ||
+                           'Size GB' || ';' ||
                            'Start Move' || ';' ||
                            'End Move' || ';' ||
                            'Move Duration' || ';' ||
@@ -919,35 +1132,37 @@ begin
 
       -- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
       -- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-  
-      message ('','',false) ;
-      message ('- Allocate extent to empty tables ...','',false) ;
-      message ('  -----------------------------------','',false) ;
-      message ('','',false) ;
-      dbms_application_info.set_action('Allocating empty segments') ;
+      if ( param_online='ONLINE' )
+      then
+        message ('','',false) ;
+        message ('- Allocate extent to empty tables ...','',false) ;
+        message ('  -----------------------------------','',false) ;
+        message ('','',false) ;
+        dbms_application_info.set_action('Allocating empty segments') ;
 
-      --for recUnallocatedIndexes in (select 'begin  dbms_space_admin.materialize_deferred_segments(''' || table_owner || ''',''' || table_name || ''') ; end ; ' command
-      for recUnallocatedTables in  (select   'alter table ' || owner || '.' || table_name || ' allocate extent ' command
-                                    from     dba_tables t
-                                    where    tablespace_name = tablespaces.tablespace_name
-                                    and      not exists (select 1 
-                                                         from   dba_segments s
-                                                         where  s.owner = t.owner 
-                                                         and    s.segment_name = t.table_name) 
-                                    UNION
-                                    select   'alter table ' || table_owner || '.' || table_name || 
-                                             ' modify partition ' || partition_name || ' allocate extent ' command
-                                    from     dba_tab_partitions t
-                                    where    tablespace_name = tablespaces.tablespace_name
-                                    and      not exists (select 1
-                                                         from   dba_segments s
-                                                         where  s.owner = t.table_owner
-                                                         and    s.segment_name = t.table_name
-                                                         and    s.partition_name = t.partition_name) 
-                                   )
-      loop
-        err := run_sql (recUnallocatedTables.command) ;
-      end loop ;
+        --for recUnallocatedIndexes in (select 'begin  dbms_space_admin.materialize_deferred_segments(''' || table_owner || ''',''' || table_name || ''') ; end ; ' command
+        for recUnallocatedTables in  (select   'alter table ' || owner || '.' || table_name || ' allocate extent ' command
+                                      from     dba_tables t
+                                      where    tablespace_name = tablespaces.tablespace_name
+                                      and      not exists (select 1 
+                                                           from   dba_segments s
+                                                           where  s.owner = t.owner 
+                                                           and    s.segment_name = t.table_name) 
+                                      UNION
+                                      select   'alter table ' || table_owner || '.' || table_name || 
+                                               ' modify partition ' || partition_name || ' allocate extent ' command
+                                      from     dba_tab_partitions t
+                                      where    tablespace_name = tablespaces.tablespace_name
+                                      and      not exists (select 1
+                                                           from   dba_segments s
+                                                           where  s.owner = t.table_owner
+                                                           and    s.segment_name = t.table_name
+                                                           and    s.partition_name = t.partition_name) 
+                                     )
+        loop
+          err := run_sql (recUnallocatedTables.command) ;
+        end loop ;
+      end if ;
     end if ;
 
     -- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -969,17 +1184,19 @@ begin
     for extentsToMove in (
               with 
               high_segs as (
-                                select /*+ ALL_ROWS */
+                                select /*+ opt_param('_smm_auto_cost_enabled','false') */
                                    owner
                                   ,segment_name
                                   ,partition_name
                                   ,segment_type
                                   ,max(block_id) block_id
+                                  ,sum(bytes) / 1024 / 1024 / 1024 size_GB 
                                 from
                                    dba_extents
                                 where
                                       tablespace_name = tablespaces.tablespace_name
-                                  and segment_name like upper(param_table||'%') 
+                                  and     regexp_like(segment_name,upper(param_table)) 
+                                  and not regexp_like(segment_name, upper(param_table_excluded))
                                   and segment_type != 'TEMPORARY'
                                 group by
                                    owner
@@ -994,6 +1211,7 @@ begin
                   ,partition_name
                   ,segment_type
                   ,block_id
+                  ,size_gb
               from 
                 high_segs
               order by block_id desc
@@ -1001,14 +1219,6 @@ begin
     loop
       if (systimestamp > param_stop_date)
       then
-        --
-        --     If the script run for more than the allotted time, then
-        -- we abort. 
-        --
-        --     Attention, if we run OFFLINE, there will still remain some
-        -- time spent in the UNUSABLE indexes rebuild. When running ONLINE
-        -- the indexes should have been maintained during the move operations.
-        --
         abort_message('Aborting the script execution after ' || to_char(param_stop_date,'dd/mm/yyyy hh24:mi:ss')) ;
         abort_loop := true ;
         exit ;
@@ -1016,7 +1226,7 @@ begin
       segments_count := segments_count + 1 ;
       dbms_application_info.set_action('Moving: ' || extentsToMove.owner ||'.'|| extentsToMove.segment_name || ' (' || extentsToMove.partition_name || ')') ;
       
-      message('Segment : ' || rpad(nvl(extentsToMove.owner ||'.'|| extentsToMove.segment_name ,' '),50) || rpad('('||nvl(extentsToMOve.segment_type,' ')||')',30) || '(# : ' || fmt3(segments_count) || ')' 
+      message('Segment : ' || rpad(nvl(extentsToMove.owner ||'.'|| extentsToMove.segment_name ,' '),50) || rpad('('||nvl(extentsToMOve.segment_type,' ')||')',30) || '(# : ' || fmt3(segments_count) || ') ' || extentsToMove.size_GB || ' GB' 
               ,' --+--> ');
             
       command := get_command(extentsToMove.owner,extentsToMove.segment_name,extentsToMove.partition_name
@@ -1053,16 +1263,7 @@ begin
         -- do not stop the execution
         --
         start_move := systimestamp ;
-        if ( param_use_parallel_WA = 'Y' )
-        then
-          --
-          --    Workaround to have the full parallelism capabilities
-          -- Alter table move don't run in parallel when called from PL/SQL
-          --
-          err := run_via_sqlplus (command,'Move : ' || extentsToMove.segment_type || ' ' || extentsToMove.segment_name || ' (' || extentsToMove.partition_name || ')') ;
-        else
-          err := run_sql (command) ;
-        end if ;
+        err := run_sql_for_move(command,'Move : ' || extentsToMove.segment_type || ' ' || extentsToMove.segment_name || ' (' || extentsToMove.partition_name || ')') ;
         if (err = -2327)
         then
           if ( extentsToMove.partition_name is not null )
@@ -1096,7 +1297,7 @@ begin
                                                                       AND ip.index_owner = extentsToMove.owner
                                                                       ) ;
               command := command || getOnlineClause ;
-              err := run_sql (command) ;
+              err := run_sql_for_move (command,'Move LOB for ' || extentsToMove.segment_type || ' ' || extentsToMove.segment_name || ' (' || extentsToMove.partition_name || ')') ;
             exception
               when no_data_found then
                 message('Object not found'
@@ -1109,20 +1310,33 @@ begin
           nb_errors := nb_errors - 1 ;
           message('Run the command Again OFFLINE mode'
                   ,'      |  > ',ts=>false);
-          err := run_sql(replace (command,' ONLINE ',' ')) ;
+          err := run_sql_for_move(replace (command,' ONLINE ',' '),'Move OFFINE ' || extentsToMove.segment_type || ' ' || extentsToMove.segment_name || ' (' || extentsToMove.partition_name || ')') ;
         end if ;
 
         message ('Errors so far : ' || nb_errors 
                 ,'         > ',ts=>false);
         end_move := systimestamp ;
-        message('##SUMMARY##' || extentsToMove.segment_type || ';' ||
+        message('##SUMMARY##' || 'MOVE' || ';' ||
+                                 extentsToMove.segment_type || ';' ||
                                  extentsToMove.segment_name || ';' ||
                                  extentsToMove.partition_name || ';' ||
+                                 replace(to_char(extentsToMove.size_GB),'.',',') || ';' ||
                                  to_char(start_move,'dd/mm/yyyy hh24:mi:ss') || ';' ||
                                  to_char(end_move,'dd/mm/yyyy hh24:mi:ss') || ';' ||
                                  (end_move-start_move) || ';' ||
                                  err,'',false) ;
-     
+        if ( extentsToMove.segment_type in ('TABLE','INDEX') )
+        then
+          message('Reset PARALLEL to 1'
+                  ,'      |  > ',ts=>false);
+          err := run_sql('alter ' || extentsToMove.segment_type || ' ' || extentsToMove.owner || '.' || extentsToMove.segment_name || ' PARALLEL 1') ;
+        end if ;
+        if (    param_online != 'ONLINE' 
+            and param_rebuild = 'EACH' 
+            and extentsToMove.segment_type in ('TABLE','TABLE PARTITION','LOB','LOB PARTITION') )
+        then
+          err := rebuildUnusableIndexes(tablespaces.tablespace_name,tablespaces.tablespace_name || case when param_move_to_new then '_NEW' else '' end) ;
+        end if ; 
         if ( nb_errors > 200 )
         then
           abort_message('Too many errors were found, aborting the script' ) ;
@@ -1130,7 +1344,7 @@ begin
           exit ;
         end if ;
 
-        if ( not param_move_to_new or (mod(segments_count,const_check_space) = 0 and free_after_hwm1 > const_space_treeshold))
+        if ( not param_move_to_new or mod(segments_count,const_check_space) = 0 )
         then
           --
           --   Calculation HWM is very long, so when moving to new TS, we do not
@@ -1170,9 +1384,7 @@ begin
         end if ;
         previous_highest_block := highest_block ;
 
-       if (     param_move_to_new 
-            and ( free_after_hwm2 > const_space_treeshold ) 
-          )
+       if ( free_after_hwm2 > const_space_treeshold )
        then
          --
          -- There is more than const_space_treeshold Gb free after HWM, resize the datafile
@@ -1181,7 +1393,8 @@ begin
          declare
            blocks_last_extent number ;
          begin
-           select  blocks
+           select  /*+ opt_param('_smm_auto_cost_enabled','false') */
+                   blocks
            into    blocks_last_extent
            from    dba_extents
            where   tablespace_name = tablespaces.tablespace_name and block_id = highest_block ;
@@ -1193,6 +1406,11 @@ begin
            err := run_sql ('alter database datafile '''|| tablespaces.file_name || 
                     ''' resize ' || to_char(ceil(((highest_block+blocks_last_extent+1)*tablespaces.block_size)/1024/1024/1024/100)*100) || ' G') ; 
            message('','',false) ;
+         exception when no_data_found then 
+           --
+           --   Extent may have been oved by another process
+           --
+           null ;
          end ;
          free_after_hwm2 := 0 ;
        end if ;
@@ -1310,41 +1528,11 @@ begin
       -- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
       -- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     
-    --
-    --     If we run OFFLINE, the indexes needs to be rebuilt, we do this on a 
-    --  Tablespace basis. We could have put this after each move, but with the
-    --  risk of rebuilding the same index several times.
-    -- 
-    message ('','',false) ;
-    message ('- Rebuilding UNUSABLE Indexes ...','',true) ;
-    message ('  -------------------------------','',false) ;
-    message ('','',false) ;
-    dbms_application_info.set_action('Rebuilding UNUSABLE Indexes') ;
-
-    for rebuildCmds in ( select owner
-                               ,index_name
-                               ,'' partition_name 
-                               ,'alter index ' || owner || '.' || index_name || ' rebuild' command 
-                         from dba_indexes 
-                         where status='UNUSABLE' 
-                         and   owner in (select username from dba_users where oracle_maintained = 'N')
-                         and   tablespace_name = tablespaces.tablespace_name
-                         UNION
-                         select index_owner
-                               ,index_name,partition_name
-                               ,'alter index ' || index_owner || '.' || index_name || ' rebuild partition ' || partition_name 
-                         from dba_ind_partitions 
-                         where status='UNUSABLE' 
-                         and   index_owner in (select username from dba_users where oracle_maintained = 'N')
-                         and   tablespace_name = tablespaces.tablespace_name
-                       )
-    loop
-      command := rebuildCmds.command || ' ' || getOnlineClause ;
-      message('Rebuild : ' || rebuildCmds.owner || '.' || rebuildCmds.index_name || 
-              case when rebuildCmds.partition_name is null then '' else '(Part : ' || rebuildCmds.partition_name || ')' end 
-              ,' --+--> ');
-      err := run_sql(command) ;
-    end loop ;
+    if (     param_online != 'ONLINE' 
+         and param_rebuild != 'NEVER' ) 
+    then 
+          err := rebuildUnusableIndexes(tablespaces.tablespace_name,tablespaces.tablespace_name || case when param_move_to_new then '_NEW' else '' end ) ;
+    end if ;
 
     if ( not abort_loop and param_genonly = 'N')
     then
@@ -1370,7 +1558,8 @@ begin
           blocks_last_extent number ;
         begin
           begin
-            select  blocks
+            select  /*+ opt_param('_smm_auto_cost_enabled','false') */
+                    blocks
             into    blocks_last_extent
             from    dba_extents
             where   tablespace_name = tablespaces.tablespace_name and block_id = highest_block ;
@@ -1444,21 +1633,23 @@ SCRIPT_LIB="Move segments to reduce space usage"
 
 pGENONLY=N
 toShift=0
-while getopts d:p:T:t:R:P:FSE:gh opt
+while getopts d:p:T:t:x:R:P:FSE:U:gh opt
 do
   case $opt in
    # --------- Database ---------------------------------------
-   d)  pDB=$OPTARG       ; toShift=$(($toShift + 2)) ;;
-   p)  pPDB=$OPTARG      ; toShift=$(($toShift + 2)) ;;
+   d)  pDB=$OPTARG             ; toShift=$(($toShift + 2)) ;;
+   p)  pPDB=$OPTARG            ; toShift=$(($toShift + 2)) ;;
    # --------- Modes de fonctionnement ------------------------
-   T)  pTBS=$OPTARG      ; toShift=$(($toShift + 2)) ;;
-   t)  pTABLE=$OPTARG    ; toShift=$(($toShift + 2)) ;;
-   R)  pMAXRUN=$OPTARG   ; toShift=$(($toShift + 2)) ;;
-   P)  pPARA=$OPTARG     ; toShift=$(($toShift + 2)) ;;
-   F)  pMODE=OFFLINE     ; toShift=$(($toShift + 1)) ;;
-   S)  pNEWTS=N          ; toShift=$(($toShift + 1)) ;;
-   E)  pEXTENTS=$OPTARG  ; toShift=$(($toShift + 2)) ;;
-   g)  pGENONLY=Y        ; toShift=$(($toShift + 1)) ;;
+   T)  pTBS=$OPTARG            ; toShift=$(($toShift + 2)) ;;
+   t)  pTABLE=$OPTARG          ; toShift=$(($toShift + 2)) ;;
+   x)  pTABLE_Excluded=$OPTARG ; toShift=$(($toShift + 2)) ;; 
+   R)  pMAXRUN=$OPTARG         ; toShift=$(($toShift + 2)) ;;
+   P)  pPARA=$OPTARG           ; toShift=$(($toShift + 2)) ;;
+   F)  pMODE=OFFLINE           ; toShift=$(($toShift + 1)) ;;
+   S)  pNEWTS=N                ; toShift=$(($toShift + 1)) ;;
+   E)  pEXTENTS=$OPTARG        ; toShift=$(($toShift + 2)) ;;
+   g)  pGENONLY=Y              ; toShift=$(($toShift + 1)) ;;
+   U)  pRebuild=$OPTARG        ; toShift=$(($toShift + 2)) ;;
    # --------- Usage ------------------------------------------
    ?|h) usage "Help requested";;
   esac
@@ -1473,13 +1664,15 @@ shift $toShift
 #
 #   Paraméters
 #
-pTBS=${pTBS:-.\*}                         # Tablespace selection
-pMAXRUN=${pMAXRUN:-1}                     # Number of run hours allowed
-pPARA=${pPARA:-8}                         # Parallelism degree
-pMODE=${pMODE:-ONLINE}                    # MOve mode
-pNEWTS=${pNEWTS:-Y}                       # Move to a new TBS
-pEXTENTS=${pEXTENTS:-1000000}             # Stop after N Segments
-
+pTBS=${pTBS:-.\*}                              # Tablespace selection
+pMAXRUN=${pMAXRUN:-1}                          # Number of run hours allowed
+pPARA=${pPARA:-8}                              # Parallelism degree
+pMODE=${pMODE:-ONLINE}                         # MOve mode
+pNEWTS=${pNEWTS:-Y}                            # Move to a new TBS
+pEXTENTS=${pEXTENTS:-1000000}                  # Stop after N Segments
+pRebuild=${pRebuild:-END}                      # Rebuild indexes
+pTABLE_Excluded=${pTABLE_Excluded:-##NONE##}
+pTABLE=${pTABLE:-.\*}
 
 [ "$pDB" = "" ] && pDB=$dbUniqueName # (if ran by runScript)
 [ "$pPDB" = "" ] && pPDB=$pdbName # (if ran by runScript)
@@ -1488,7 +1681,7 @@ pEXTENTS=${pEXTENTS:-1000000}             # Stop after N Segments
 [ "$pPDB" = "" ] && die "Name of pluggable database is mandatory"
 
 mkdir -p $HOME/reduceTablespace/$pDB
-LOG_FILE=$HOME/reduceTablespace/$pDB/reduceTablespace_$(date +%Y%m%d_%M%M%S).log
+LOG_FILE=$HOME/reduceTablespace/$pDB/reduceTablespace_$(date +%Y%m%d_%H%M%S).log
 
 #
 #   Constants
@@ -1550,8 +1743,9 @@ alter session set container=$pPDB ;
 --
 exec dbms_application_info.set_module('reduceTablespace_JOB (PID: \$\$)','Start') ;
 exec dbms_application_info.set_action('\$3') ;
-dbms_application_info.set_client_info('Move JOB') ;
-alter session set parallel_force_local=true ;
+exec dbms_application_info.set_client_info('Move JOB') ;
+--alter session set parallel_force_local=true ;
+alter session set parallel_force_local=false ;
 alter session set INMEMORY_QUERY=disable ;
 --alter session enable parallel dml ;
 alter session force  parallel dml parallel \$2 ;
@@ -1567,8 +1761,10 @@ set feed on
 status=\$?
 echo \"========= Fin operation ================\" >> /admindb/work/reduceTablespace_MOVE_LOG.log
 date >> /admindb/work/reduceTablespace_MOVE_LOG.log
-echo \"$1\" >> /admindb/work/reduceTablespace_MOVE_LOG.log
-echo \"$res\" >> /admindb/work/reduceTablespace_MOVE_LOG.log
+echo \"\$1\" >> /admindb/work/reduceTablespace_MOVE_LOG.log
+echo \"\$res\" >> /admindb/work/reduceTablespace_MOVE_LOG.log
+echo "STDERR" >> /admindb/work/reduceTablespace_MOVE_LOG.log
+echo \"\$res\" | grep \"^ *ORA-\" | egrep -v \"ORA-00604|ORA-06550\" >> /admindb/work/reduceTablespace_MOVE_LOG.log
 echo \"\$res\" | grep \"^ *ORA-\" | egrep -v \"ORA-00604|ORA-06550\" >&2
 exit \$status" > $WA_SHELL_SCRIPT || die "Unable to create the $WA_SHELL_SCRIPT script"
     chmod 755 $WA_SHELL_SCRIPT
