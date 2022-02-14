@@ -1,4 +1,4 @@
-VERSION=0.1
+uERSION=0.1
 #
 ###########################################################################################################################
 #
@@ -1744,8 +1744,8 @@ alter session set container=$pPDB ;
 exec dbms_application_info.set_module('reduceTablespace_JOB (PID: \$\$)','Start') ;
 exec dbms_application_info.set_action('\$3') ;
 exec dbms_application_info.set_client_info('Move JOB') ;
---alter session set parallel_force_local=true ;
-alter session set parallel_force_local=false ;
+alter session set parallel_force_local=true ;
+--alter session set parallel_force_local=false ;
 alter session set INMEMORY_QUERY=disable ;
 --alter session enable parallel dml ;
 alter session force  parallel dml parallel \$2 ;
