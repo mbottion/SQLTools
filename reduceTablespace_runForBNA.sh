@@ -34,12 +34,13 @@ i=0
   TABLE_IN1="^RES_RESSOURCE_RETENUE$"
   TABLE_IN2="^RES_RESSOURCE_RETENUE_IX.*"
   TABLE_OUT="##NONE##"
-  echo "     - Lancement #$i : TABLE_IN=$TABLE_IN2 / TABLE_OUT=$TABLE_OUT puis TABLE_IN=$TABLE_IN2 / TABLE_OUT=$TABLE_OUT puis"
+  echo "     - Lancement #$i : TABLE_IN=$TABLE_IN1 / TABLE_OUT=$TABLE_OUT puis TABLE_IN=$TABLE_IN2 / TABLE_OUT=$TABLE_OUT puis"
   ( $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -t "${TABLE_IN1}"                 -P 32 -R $RUN -F -U NEVER $GENERATE >/dev/null 2>&1 ; \
     $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -t "${TABLE_IN2}"                 -P 24 -R $RUN -F -U END $GENERATE >/dev/null 2>&1 ) &
   PIDS[$i]=$!
   echo "          >> PID=${PIDS[$i]}"
 
+  sleep 900  # On laisse bosser 15 minutes seul
 
   i=$(($i + 1))
   TABLE_IN1="^RES_RESSOURCE$"
@@ -52,6 +53,7 @@ i=0
   PIDS[$i]=$!
   echo "          >> PID=${PIDS[$i]}"
 
+  sleep 900 # On laisse bosser 15 minutes seul avec RES_RESSOURCE_RETENUE
 
   i=$(($i + 1))
   TABLE_IN="^(RES_RESSOURCE_DETAIL_BRM.*)$"
