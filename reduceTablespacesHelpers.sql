@@ -204,6 +204,7 @@ SELECT
 FROM
   gv$session_longops l
 join gv$session s on (    s.inst_id = l.inst_id
+
                       and s.sid=l.sid
                       and s.serial# = l.serial# )
 WHERE
@@ -226,6 +227,7 @@ from
 where
    tablespace_name in ('&tbs','&tbs._NEW')
 --   and segment_name='RES_RESSOURCE'
+  and segment_type != 'TEMPORARY'
 group by
   tablespace_name;
 
@@ -325,7 +327,7 @@ left join running_jobs j on (s.segment_name = j.segment_name
 --where s.segment_name like '%DEMUSAGER%'
 order by block_id desc
 /
-
+select * from dba_segments where tablespace_name like '&tbs._NEW' ;
 --
 --    Détail de l'espace avec les segments, l'espace libre, la taille du fichier et les estpaces libres
 -- en dessous de l'objet et occupés au dessus
