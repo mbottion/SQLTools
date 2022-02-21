@@ -1,4 +1,7 @@
 
+set feedback off
+alter session set nls_numeric_characters=', ' ;
+set feedback on
 define past_days=30
 define schemas_list="'BNA','TEC','LIQ1','LIQ2','LIQF1','LIQF2','SYN1','ACE1','TGP'"
 define objects_name=%
