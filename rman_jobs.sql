@@ -19,7 +19,7 @@ begin
 end ;
 /
 
-define NUMBER_OF_DAYS="case when '&P1' is null then 30 else &P1 end"
+define NUMBER_OF_DAYS="case when '&P1' is null then 30 else to_number('&P1') end"
 set lines 220
 set pages 1000
 col cf for 9,999
