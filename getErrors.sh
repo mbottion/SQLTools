@@ -28,7 +28,7 @@ file=$1
 [ ! -f $file ] && die  "Fichier $1 introuvable"
 f=$(basename $file)
 
-if [ "$(file $file | grep -i ASCII)" = "" ]
+if [ "$(file $file | egrep -i "UTF-8|ASCII|Text")" = "" ]
 then
   cmd="zcat $file"
 else
