@@ -1,8 +1,8 @@
 declare -a PIDS
-DB=tst18c
-PDB=bna0t18
+DB=prd01exa
+PDB=bna0prd
 
-SCRIPT_DIR=$HOME/mbo
+SCRIPT_DIR=/admindb/technique/reduceTablespaces
 LOG_DIR=$HOME/reduceTablespace/$DB
 mkdir -p $LOG_DIR
 
@@ -11,7 +11,7 @@ LOCK_FILE=$LOG_FILE.lck
 touch $LOCK_FILE
 i=0
 {
-  RUN=12                           # Durée max
+  RUN=2                           # Durée max
   TBS=TBS_BNA0PRD_BNA_ACTIVE       # Tablespace
 
   GENERATE=""
@@ -35,7 +35,7 @@ i=0
   TABLE_IN2="^RES_RESSOURCE_RETENUE_IX.*"
   TABLE_OUT="##NONE##"
   echo "     - Lancement #$i : TABLE_IN=$TABLE_IN1 / TABLE_OUT=$TABLE_OUT puis TABLE_IN=$TABLE_IN2 / TABLE_OUT=$TABLE_OUT puis"
-  ( $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -t "${TABLE_IN1}"                 -P 32 -R $RUN -F -U NEVER $GENERATE >/dev/null 2>&1 ; \
+  ( $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -t "${TABLE_IN1}"                 -P 48 -R $RUN -F -U NEVER $GENERATE >/dev/null 2>&1 ; \
     $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -t "${TABLE_IN2}"                 -P 24 -R $RUN -F -U END $GENERATE >/dev/null 2>&1 ) &
   PIDS[$i]=$!
   echo "          >> PID=${PIDS[$i]}"
@@ -146,9 +146,9 @@ i=0
   echo "============================================================================="
   echo " Lancement Voituer Balai, a : $(date)"
   echo "============================================================================="
-  $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -R 5 -P 16 -F -U END $GENERATE #>/dev/null 2>&1
-  sleep $SLEEP 
-  $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -R 5 -P 16 -F -U END $GENERATE #>/dev/null 2>&1
+  $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -R 5 -P 32 -F -U END $GENERATE #>/dev/null 2>&1
+#  sleep $SLEEP 
+#  $SCRIPT_DIR/reduceTablespace.sh -d $DB -p $PDB -T $TBS -R 5 -P 16 -F -U END $GENERATE #>/dev/null 2>&1
   echo "============================================================================="
   echo "     Fin       a : $(date)"
   echo "============================================================================="
