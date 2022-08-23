@@ -66,7 +66,7 @@ BEGIN {jour="";test_print=0; error=""; nb=0;today="'$(date +%Y%m%d)'";min_date=t
   getline $0
   while ( $0 ~ /ORA-/ )
   {
-    error=sprintf("%s\n  |                                > %s",error,$0)
+    error=sprintf("%s\n  |   |                            > %s",error,$0)
     getline $0
   }
 }
