@@ -58,6 +58,18 @@ eval $cmd  | \
   sed -e "s;\(ospid *[0-9]*\);(ospid NNNNNN);" | \
   awk '
 BEGIN {jour="";test_print=0; error=""; nb=0;today="'$(date +%Y%m%d)'";min_date=today-'$DAYS'+1; to_print="Y"}
+/ORA-0$/ {next}
+/in tablespace SYSAUX/ {next}
+/Patch Description/ {next}
+/ORA-/ { 
+  error=$0 
+  getline $0
+  while ( $0 ~ /ORA-/ )
+  {
+    error=sprintf("%s\n  |                                > %s",error,$0)
+    getline $0
+  }
+}
 /^[0-9]{4}-[0-9]{2}-[0-9]{2}/ {
   heure=substr($0,12)
   jour_prec=jour
@@ -67,9 +79,6 @@ BEGIN {jour="";test_print=0; error=""; nb=0;today="'$(date +%Y%m%d)'";min_date=t
 #  printf("                           - %s\n",$0)
   test_print=1
 }
-/ORA-0$/ {next}
-/in tablespace SYSAUX/ {next}
-/ORA-/ { error=$0 }
 /Starting ORACLE instance/                                              { error=sprintf("'${GREEN_NO}'*** INSTANCE       START *** '${NORM}': %s",$0) }
 /Instance shutdown complete/                                            { error=sprintf("'${RED_NORM}'*** INSTANCE STOP        *** '${NORM}': %s",$0) }
 /terminating the instance/                                              { error=sprintf("'${RED_BOLD}'*** INSTANCE CRASH       *** '${NORM}': %s",$0) }
