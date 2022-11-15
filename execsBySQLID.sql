@@ -47,8 +47,10 @@ col end_snap_time format a20
 col PX_SERVERS_EXECS_TOTAL format 999999
 col rowsCnt format 999G999G999G999
 col disk_reads_total format 999G999G999G999
-col elapsed format 999G999G999D99
+col elapsed_all format 999G999G999D99
+col elapsed_real format 999G999G999D99
 col PARSING_SCHEMA_NAME format a10
+col plage_temps format a20
 
 
 
@@ -63,7 +65,16 @@ select
   ,sql.PX_SERVERS_EXECS_TOTAL
   ,sql.disk_reads_total
   ,sql.ROWS_PROCESSED_TOTAL       rowsCnt
-  ,sql.ELAPSED_TIME_TOTAL/1000000 elapsed
+  ,sql.ELAPSED_TIME_TOTAL/1000000 elapsed_all
+  ,case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else (sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL end elapsed_real
+  ,case 
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 10000 then '> 10 000 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 5000 then '5 001 - 10 000 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 1000 then '1001 - 5000 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 500  then '501-1000 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 250  then '251-500 s'
+    else '<250 s'
+   end plage_temps
   ,sql.PLAN_HASH_VALUE
 --  ,OPTIMIZER_ENV_HASH_VALUE
 from
