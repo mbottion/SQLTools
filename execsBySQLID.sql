@@ -89,3 +89,12 @@ where
 order by BEGIN_INTERVAL_TIME
 /
 
+
+prompt
+prompt ==================================================================================
+prompt Execution plans for : &SQL_ID
+prompt ==================================================================================
+prompt
+
+SELECT * FROM table(DBMS_XPLAN.DISPLAY_AWR('&SQL_ID'));
+
