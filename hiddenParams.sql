@@ -1,5 +1,5 @@
 set line 200
- col PARAMETER format a30
+ col PARAMETER format a40
  col DESCRIPTION format a60
  col SESSION_VALUE format a10
  col INSTANCE_VALUE format a10
