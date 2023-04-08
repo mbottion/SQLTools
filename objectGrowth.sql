@@ -121,7 +121,10 @@ with
       segment_growth sgr
     join DBA_SEGMENTS seg on (    sgr.owner                          = seg.owner
                               and sgr.object_name                    = seg.segment_name
-                              and nvl(sgr.subobject_name,'$$MAIN$$') = nvl(seg.partition_name,'$$MAIN$$'))
+                              --
+                              --   Probleme avec GDA_HISTORIQUE_INTERACTION_IX3
+                              --
+                              and nvl(decode(sgr.subobject_name,'** UNAVAILABLE **',null,sgr.subobject_name),'$$MAIN$$') = nvl(seg.partition_name,'$$MAIN$$'))
   )
   ,pivot_header as
   (
