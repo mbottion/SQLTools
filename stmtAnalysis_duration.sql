@@ -16,6 +16,10 @@ col C1              format 999G999 heading "<=10 secs"
 col C1              format 999G999 heading "<=10 secs"
 col C1              format 999G999 heading "<=10 secs"
 
+col sql_text        format a50     word_wrapped
+
+define long_running_time=3600
+
 with running_duration as (
     select /*+PARALLEL(8)*/
       --
