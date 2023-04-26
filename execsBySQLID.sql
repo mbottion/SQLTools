@@ -98,7 +98,9 @@ prompt
 
 rem SELECT * FROM table(DBMS_XPLAN.DISPLAY_AWR('&SQL_ID'));
 
-set serveroutput on size unlimited format wrapped
+set serveroutput on size unlimited format wrapped feed off
+declare 
+  i number := 0 ;
 begin
   for rec1 in (
                select  DISTINCT sql.PLAN_HASH_VALUE  
@@ -113,6 +115,7 @@ begin
                and BEGIN_INTERVAL_TIME between &start_date_FR and &end_date_FR
               )
   loop
+    i := i + 1 ;
     dbms_output.put_line('=================================================================================') ;
     dbms_output.put_line('Plan : ' || rec1.PLAN_HASH_VALUE);
     dbms_output.put_line('=================================================================================') ;
@@ -123,5 +126,11 @@ begin
     end loop ;
     dbms_output.put_line('') ;
   end loop ;
+  dbms_output.put_line('') ;
+  dbms_output.put_line('') ;
+  dbms_output.put_line('===================================================================================================================') ;
+  dbms_output.put_line('NOTE : ' || i || ' different plans observed for &SQL_ID between ' || &start_date_FR || ' and ' || &end_date_FR ) ;
+  dbms_output.put_line('===================================================================================================================') ;
+  dbms_output.put_line('') ;
 end ;
 /
