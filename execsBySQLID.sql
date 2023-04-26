@@ -101,7 +101,7 @@ rem SELECT * FROM table(DBMS_XPLAN.DISPLAY_AWR('&SQL_ID'));
 set serveroutput on size unlimited format wrapped
 begin
   for rec1 in (
-               select  sql.PLAN_HASH_VALUE  
+               select  DISTINCT sql.PLAN_HASH_VALUE  
                from
                dba_hist_sqlstat     sql
                join dba_hist_snapshot snap on (    sql.snap_id         = snap.snap_id
