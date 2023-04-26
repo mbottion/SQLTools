@@ -1,3 +1,59 @@
+set feedback off
+set serveroutput on
+begin
+  if (upper('&1') in ('USAGE','HELP','-?','-H') or '&1' is null)
+  then
+    raise_application_error(-20000,'
++---------------------------------------------------------------------------------------
+| Usage:
+|    heatMapOPAProcessingTime.sql SQLID [start] [end] 
+|
+|      Extracs execitions of a specific SQLID in the past
+|
+|   Parameters :
+|       SQLID    : SQL to analyze                                     - Mandatory                            
+|       start    : Analysis start date (dd/mm/yyyy [hh24:mi:ss])      - Default : Noon (Today or yesterday)
+|       end      : Analysis end date   (dd/mm/yyyy [hh24:mi:ss])      - Default : now
+|
++---------------------------------------------------------------------------------------
+       ');
+  end if ;
+end ;
+/
+
+
+-- -----------------------------------------------------------------
+-- Parameters
+-- -----------------------------------------------------------------
+
+define SQL_ID='&1'
+--
+--  Analysis start date : Default (If before noon, noon yesterday, otherwise noon)
+--
+define start_date_FR="case when '&2' is null then round(sysdate)-0.5 else to_date('&2','dd/mm/yyyy hh24:mi:ss') end"
+--
+--  Analysis end date : default now
+--
+define end_date_FR="case when '&3' is null then sysdate else to_date('&3','dd/mm/yyyy hh24:mi:ss') end"
+
+set pages 0 head off
+col INFORMATION format a100 newline
+
+select
+   '' INFORMATION
+  ,'SQL Statement duration analysis' INFORMATION
+  ,'===============================' INFORMATION
+  ,'' INFORMATION
+  ,'  Time taken for SQL ID &SQL_ID per plan hash' INFORMATION
+  ,'' INFORMATION
+  ,'  between ' || to_char(&start_date_FR,'dd/mm/yyyy hh24:mi:ss') || ' and ' || to_char(&end_date_FR,'dd/mm/yyyy hh24:mi:ss') INFORMATION
+  ,''
+from
+  dual ;
+set head on
+set pages 10000
+
+
 col instance_number format 999     heading "Inst."
 col username        format a30     heading "User"
 col C1              format 999G999 heading "<=10 secs"
@@ -64,7 +120,8 @@ with running_duration as (
     where 
           sh.session_type='FOREGROUND'          -- Only user sessions
       and du.username not in ('SYS','SYSTEM')   -- Filter unneeded users
-      and sh.sample_time > trunc(sysdate)       -- Current day
+      --and sh.sample_time > trunc(sysdate)       -- Current day
+      and sh.sample_time between &start_date_FR and &end_date_FR
       and sh.sql_id is not null                 -- Sessions qui n'ont rien ex?cut??
       and sh.sql_exec_id is not null            -- Donnent des r?sultats bizarres
 )
@@ -281,5 +338,3 @@ pivot ( count(duration_interval) for duration_interval in (
 order by 1, 2
 /* ************************************************************************** */
 /
-
-select * from dba_hist_active_sess_history ;
