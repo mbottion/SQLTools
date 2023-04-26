@@ -6,9 +6,10 @@ begin
     raise_application_error(-20000,'
 +---------------------------------------------------------------------------------------
 | Usage:
-|    heatMapOPAProcessingTime.sql SQLID [start] [end] 
+|    stmtAnalysis_PerSqlIdHash.sql SQLID [start] [end] 
 |
-|      Extracs execitions of a specific SQLID in the past
+|      Extracs execitions of a specific SQLID in the past and gives execution
+|    times per PLAN HASH
 |
 |   Parameters :
 |       SQLID    : SQL to analyze                                     - Mandatory                            
@@ -36,18 +37,27 @@ define start_date_FR="case when '&2' is null then round(sysdate)-0.5 else to_dat
 --
 define end_date_FR="case when '&3' is null then sysdate else to_date('&3','dd/mm/yyyy hh24:mi:ss') end"
 
+--
+--   Used in PIVOT 2
+--
+define long_running_time=3600
+
 set pages 0 head off
 col INFORMATION format a100 newline
 
 select
-   '' INFORMATION
-  ,'SQL Statement duration analysis' INFORMATION
-  ,'===============================' INFORMATION
-  ,'' INFORMATION
-  ,'  Time taken for SQL ID &SQL_ID per plan hash' INFORMATION
-  ,'' INFORMATION
-  ,'  between ' || to_char(&start_date_FR,'dd/mm/yyyy hh24:mi:ss') || ' and ' || to_char(&end_date_FR,'dd/mm/yyyy hh24:mi:ss') INFORMATION
-  ,''
+   ''                                                                              INFORMATION
+  ,'=============================================================================' INFORMATION
+  ,'SQL Statement duration analysis'                                               INFORMATION
+  ,'=============================================================================' INFORMATION
+  ,''                                                                              INFORMATION
+  ,'  Time taken for SQL ID &SQL_ID per plan hash'                                 INFORMATION
+  ,''                                                                              INFORMATION
+  ,'  between ' || to_char(&start_date_FR,'dd/mm/yyyy hh24:mi:ss') || 
+      ' and ' || to_char(&end_date_FR,'dd/mm/yyyy hh24:mi:ss')                     INFORMATION
+  ,''                                                                              INFORMATION
+  ,'=============================================================================' INFORMATION
+  ,''                                                                              INFORMATION
 from
   dual ;
 set head on
@@ -67,14 +77,22 @@ col C8              format 999G999 heading "1-2 h"
 col C9              format 999G999 heading "2-6 h"
 col C10             format 999G999 heading "6-12 h"
 col C11             format 999G999 heading "> 12 h"
-col C12             format 999G999 heading "<=10 secs"
-col C1              format 999G999 heading "<=10 secs"
-col C1              format 999G999 heading "<=10 secs"
-col C1              format 999G999 heading "<=10 secs"
-
+col SQL_ID_HASH     format a35     heading "SQL ID/PLan Hash"
 col sql_text        format a50     word_wrapped
 
-define long_running_time=3600
+break on report
+compute sum of C1  on report 
+compute sum of c2  on report
+compute sum of c3  on report
+compute sum of c4  on report
+compute sum of c5  on report
+compute sum of c6  on report
+compute sum of c7  on report
+compute sum of c8  on report
+compute sum of c9  on report
+compute sum of c10 on report
+compute sum of c11  on report
+
 
 with running_duration as (
     select /*+PARALLEL(8)*/
@@ -120,7 +138,6 @@ with running_duration as (
     where 
           sh.session_type='FOREGROUND'          -- Only user sessions
       and du.username not in ('SYS','SYSTEM')   -- Filter unneeded users
-      --and sh.sample_time > trunc(sysdate)       -- Current day
       and sh.sample_time between &start_date_FR and &end_date_FR
       and sh.sql_id is not null                 -- Sessions qui n'ont rien ex?cut??
       and sh.sql_exec_id is not null            -- Donnent des r?sultats bizarres
@@ -146,7 +163,7 @@ with running_duration as (
 ,stmt_duration_hash as (
     select
        --
-       --   Collect interresting lines from the select above
+       --   Collect interresting lines from the select above (same than stmt_duration, but group also by sql_plan_hash_value)
        --
        instance_number
       ,username
@@ -197,7 +214,7 @@ with running_duration as (
 ,stmt_duration_pre_pivot_hash as (
      select 
         --
-        --    Prepare data for the PIVOT
+        --    Prepare data for the PIVOT (Same than above but add sql_plan_hash_value)
         --
         instance_number
        ,username
@@ -254,6 +271,13 @@ from stmt_duration sd
 join dba_hist_sqltext dt on (dt.sql_id = sd.sql_id)
 where sd.duration_secs >= 10
 order by 1,2
+/**************************************************************
+ *
+ *     Below are the different useful pivots to present
+ * the results in various ways. To use one, simply remove
+ * the space between star and slash in the comment 
+ *
+ **************************************************************/
 /* ------------------------------------------------------------- 
  * PIVOT 1 
  * =============================================================
@@ -306,6 +330,13 @@ select * from (select
                          and s2.duration_secs >= &long_running_time
                         )
               )
+pivot ( count(duration_interval) for duration_interval in ( 
+              '<=10 secs' as C1  , '10-30 secs' as C2  , '30-60 secs' as C3
+             ,'1-5 mins'  as C4  , '5-10 mins'  as C5  , '10-30 mins' as C6  , '30-60 mins' as C7
+             ,'1-2 h'     as C8  , '2-6 h'      as C9  , '6-12 h'     as C10
+             ,'> 12 h'    as C11
+             )
+      )
 /* ------------------------------------------------------------- 
  * PIVOT 3 
  * =============================================================
@@ -326,7 +357,7 @@ select * from (select
                        where
                              s1.sql_id = s2.sql_id
                         )
-               and s1.sql_id='0bgtzyr8nsu8t'
+              and s1.sql_id = '&sql_ID'
               )
 pivot ( count(duration_interval) for duration_interval in ( 
               '<=10 secs' as C1  , '10-30 secs' as C2  , '30-60 secs' as C3
