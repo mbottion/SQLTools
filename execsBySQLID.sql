@@ -14,9 +14,7 @@ begin
 |       SQLID    : SQL to analyze                                     - Mandatory                            
 |       start    : Analysis start date (dd/mm/yyyy [hh24:mi:ss])      - Default : Noon (Today or yesterday)
 |       end      : Analysis end date   (dd/mm/yyyy [hh24:mi:ss])      - Default : now
-|       engine   : Engine name                                        - Default : %
-|       Type     : Type of display VALUES/PCT                         - Default : PCT
-|       interval : interval of cases number used to group the results - Default : 50
+|       plans    : Show PLANS                                         - Default : YES
 |
 +---------------------------------------------------------------------------------------
        ');
@@ -38,6 +36,10 @@ define start_date_FR="case when '&2' is null then round(sysdate)-0.5 else to_dat
 --  Analysis end date : default now
 --
 define end_date_FR="case when '&3' is null then sysdate else to_date('&3','dd/mm/yyyy hh24:mi:ss') end"
+--
+--  Display plans used in the period
+--
+define showPlans="case when '&4' is null then 'YES' else upper('&4') end"
 
 set lines 200
 set pages 10000
@@ -66,13 +68,13 @@ select
   ,sql.disk_reads_total
   ,sql.ROWS_PROCESSED_TOTAL       rowsCnt
   ,sql.ELAPSED_TIME_TOTAL/1000000 elapsed_all
-  ,case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else (sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL end elapsed_real
+  ,case when sql.PX_SERVERS_EXECS_TOTAL = 0 then sql.ELAPSED_TIME_TOTAL/1000000 else (sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL end elapsed_real
   ,case 
-    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 10000 then '> 10 000 s'
-    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 5000 then '5 001 - 10 000 s'
-    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 1000 then '1001 - 5000 s'
-    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 500  then '501-1000 s'
-    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then null else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 250  then '251-500 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then sql.ELAPSED_TIME_TOTAL/1000000 else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 10000 then '> 10 000 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then sql.ELAPSED_TIME_TOTAL/1000000 else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 5000 then '5 001 - 10 000 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then sql.ELAPSED_TIME_TOTAL/1000000 else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 1000 then '1001 - 5000 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then sql.ELAPSED_TIME_TOTAL/1000000 else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 500  then '501-1000 s'
+    when case when sql.PX_SERVERS_EXECS_TOTAL = 0 then sql.ELAPSED_TIME_TOTAL/1000000 else ((sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL) end > 250  then '251-500 s'
     else '<250 s'
    end plage_temps
   ,sql.PLAN_HASH_VALUE
@@ -102,35 +104,43 @@ set serveroutput on size unlimited format wrapped feed off
 declare 
   i number := 0 ;
 begin
-  for rec1 in (
-               select  DISTINCT sql.PLAN_HASH_VALUE  
-               from
-               dba_hist_sqlstat     sql
-               join dba_hist_snapshot snap on (    sql.snap_id         = snap.snap_id
-                                              and sql.dbid            = snap.dbid
-                                              and sql.instance_number = snap.instance_number
-                                              )
-              where
-                   sql.sql_id = '&SQL_ID'
-               and BEGIN_INTERVAL_TIME between &start_date_FR and &end_date_FR
-              )
-  loop
-    i := i + 1 ;
-    dbms_output.put_line('=================================================================================') ;
-    dbms_output.put_line('Plan : ' || rec1.PLAN_HASH_VALUE);
-    dbms_output.put_line('=================================================================================') ;
-    
-    for rec2 in (select * from table(DBMS_XPLAN.DISPLAY_AWR('&SQL_ID',rec1.PLAN_HASH_VALUE)) )
+  if ( &showPlans='YES' )
+  then
+    for rec1 in (
+                 select  DISTINCT sql.PLAN_HASH_VALUE  
+                 from
+                 dba_hist_sqlstat     sql
+                 join dba_hist_snapshot snap on (    sql.snap_id         = snap.snap_id
+                                                and sql.dbid            = snap.dbid
+                                                and sql.instance_number = snap.instance_number
+                                                )
+                where
+                     sql.sql_id = '&SQL_ID'
+                 and BEGIN_INTERVAL_TIME between &start_date_FR and &end_date_FR
+                )
     loop
-      dbms_output.put_line(rec2.plan_table_output) ;
+      i := i + 1 ;
+      dbms_output.put_line('=================================================================================') ;
+      dbms_output.put_line('Plan : ' || rec1.PLAN_HASH_VALUE);
+      dbms_output.put_line('=================================================================================') ;
+    
+      for rec2 in (select * from table(DBMS_XPLAN.DISPLAY_AWR('&SQL_ID',rec1.PLAN_HASH_VALUE)) )
+      loop
+        dbms_output.put_line(rec2.plan_table_output) ;
+      end loop ;
+      dbms_output.put_line('') ;
     end loop ;
     dbms_output.put_line('') ;
-  end loop ;
-  dbms_output.put_line('') ;
-  dbms_output.put_line('') ;
-  dbms_output.put_line('===================================================================================================================') ;
-  dbms_output.put_line('NOTE : ' || i || ' different plans observed for &SQL_ID between ' || &start_date_FR || ' and ' || &end_date_FR ) ;
-  dbms_output.put_line('===================================================================================================================') ;
-  dbms_output.put_line('') ;
+    dbms_output.put_line('') ;
+    dbms_output.put_line('===================================================================================================================') ;
+    dbms_output.put_line('NOTE : ' || i || ' different plans observed for &SQL_ID between ' || &start_date_FR || ' and ' || &end_date_FR ) ;
+    dbms_output.put_line('       To hide plans use ''NO'' as fourth parameter') ;
+    dbms_output.put_line('===================================================================================================================') ;
+    dbms_output.put_line('') ;
+  else
+    dbms_output.put_line('') ;
+    dbms_output.put_line('  To display plans use ''YES'' or null as fourth parameter') ;
+    dbms_output.put_line('') ;
+  end if ;
 end ;
 /
