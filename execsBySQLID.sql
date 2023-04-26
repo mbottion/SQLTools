@@ -92,9 +92,36 @@ order by BEGIN_INTERVAL_TIME
 
 prompt
 prompt ==================================================================================
-prompt Execution plans for : &SQL_ID
+prompt Execution plans for : &SQL_ID (Only those in the selection above)
 prompt ==================================================================================
 prompt
 
-SELECT * FROM table(DBMS_XPLAN.DISPLAY_AWR('&SQL_ID'));
+rem SELECT * FROM table(DBMS_XPLAN.DISPLAY_AWR('&SQL_ID'));
 
+set serveroutput on size unlimited format wrapped
+begin
+  for rec1 in (
+               select  sql.PLAN_HASH_VALUE  
+               from
+               dba_hist_sqlstat     sql
+               join dba_hist_snapshot snap on (    sql.snap_id         = snap.snap_id
+                                              and sql.dbid            = snap.dbid
+                                              and sql.instance_number = snap.instance_number
+                                              )
+              where
+                   sql.sql_id = '&SQL_ID'
+               and BEGIN_INTERVAL_TIME between &start_date_FR and &end_date_FR
+              )
+  loop
+    dbms_output.put_line('=================================================================================') ;
+    dbms_output.put_line('Plan : ' || rec1.PLAN_HASH_VALUE);
+    dbms_output.put_line('=================================================================================') ;
+    
+    for rec2 in (select * from table(DBMS_XPLAN.DISPLAY_AWR('&SQL_ID',rec1.PLAN_HASH_VALUE)) )
+    loop
+      dbms_output.put_line(rec2.plan_table_output) ;
+    end loop ;
+    dbms_output.put_line('') ;
+  end loop ;
+end ;
+/
