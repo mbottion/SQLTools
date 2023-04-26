@@ -1,3 +1,67 @@
+set feedback off
+set serveroutput on
+begin
+  if (upper('&1') in ('USAGE','HELP','-?','-H'))
+  then
+    raise_application_error(-20000,'
++---------------------------------------------------------------------------------------
+| Usage:
+|   stmtAnalysis_longRunning.sql [start] [end] 
+|
+|      Statements running since a long time
+|
+|   Parameters :
+|       start    : Analysis start date (dd/mm/yyyy [hh24:mi:ss])      - Default : Noon (Today or yesterday)
+|       end      : Analysis end date   (dd/mm/yyyy [hh24:mi:ss])      - Default : now
+|
++---------------------------------------------------------------------------------------
+       ');
+  end if ;
+end ;
+/
+
+
+-- -----------------------------------------------------------------
+-- Parameters
+-- -----------------------------------------------------------------
+
+define SQL_ID='dummy'
+--
+--  Analysis start date : Default (If before noon, noon yesterday, otherwise noon)
+--
+define start_date_FR="case when '&1' is null then round(sysdate)-0.5 else to_date('&1','dd/mm/yyyy hh24:mi:ss') end"
+--
+--  Analysis end date : default now
+--
+define end_date_FR="case when '&2' is null then sysdate else to_date('&2','dd/mm/yyyy hh24:mi:ss') end"
+
+--
+--   Used in PIVOT 2
+--
+define long_running_time=3600
+
+set pages 0 head off
+col INFORMATION format a100 newline
+
+select
+   ''                                                                              INFORMATION
+  ,'=============================================================================' INFORMATION
+  ,'SQL Statement duration analysis'                                               INFORMATION
+  ,'=============================================================================' INFORMATION
+  ,''                                                                              INFORMATION
+  ,'  Statements running since more than &long_running_time seconds'               INFORMATION
+  ,''                                                                              INFORMATION
+  ,'  between ' || to_char(&start_date_FR,'dd/mm/yyyy hh24:mi:ss') || 
+      ' and ' || to_char(&end_date_FR,'dd/mm/yyyy hh24:mi:ss')                     INFORMATION
+  ,''                                                                              INFORMATION
+  ,'=============================================================================' INFORMATION
+  ,''                                                                              INFORMATION
+from
+  dual ;
+set head on
+set pages 10000
+
+
 col instance_number format 999     heading "Inst."
 col username        format a30     heading "User"
 col C1              format 999G999 heading "<=10 secs"
@@ -11,14 +75,22 @@ col C8              format 999G999 heading "1-2 h"
 col C9              format 999G999 heading "2-6 h"
 col C10             format 999G999 heading "6-12 h"
 col C11             format 999G999 heading "> 12 h"
-col C12             format 999G999 heading "<=10 secs"
-col C1              format 999G999 heading "<=10 secs"
-col C1              format 999G999 heading "<=10 secs"
-col C1              format 999G999 heading "<=10 secs"
-
+col SQL_ID_HASH     format a35     heading "SQL ID/PLan Hash"
 col sql_text        format a50     word_wrapped
 
-define long_running_time=3600
+break on report
+compute sum of C1  on report 
+compute sum of c2  on report
+compute sum of c3  on report
+compute sum of c4  on report
+compute sum of c5  on report
+compute sum of c6  on report
+compute sum of c7  on report
+compute sum of c8  on report
+compute sum of c9  on report
+compute sum of c10 on report
+compute sum of c11  on report
+
 
 with running_duration as (
     select /*+PARALLEL(8)*/
@@ -48,12 +120,13 @@ with running_duration as (
       ,min(sh.sample_time) over (partition by ds.instance_number,sh.user_id,sh.sql_id,sh.sql_exec_id) start_time
       ,sh.sample_time
       ,sh.program
+      ,sh.sql_plan_hash_value
     from 
       dba_hist_active_sess_history sh
       join dba_hist_snapshot ds on (ds.snap_id = sh.snap_id and ds.instance_number = sh.instance_number)
       join dba_users du on (sh.user_id = du.user_id)
       --
-      --    To différentiate running statements
+      --    To diff?rentiate running statements
       --
       left join gv$session s on (    s.sid=sh.session_id 
                                  and s.serial#=sh.session_serial# 
@@ -63,9 +136,9 @@ with running_duration as (
     where 
           sh.session_type='FOREGROUND'          -- Only user sessions
       and du.username not in ('SYS','SYSTEM')   -- Filter unneeded users
-      and sh.sample_time > trunc(sysdate)       -- Current day
-      and sh.sql_id is not null                 -- Sessions qui n'ont rien exécuté?
-      and sh.sql_exec_id is not null            -- Donnent des résultats bizarres
+      and sh.sample_time between &start_date_FR and &end_date_FR
+      and sh.sql_id is not null                 -- Sessions qui n'ont rien ex?cut??
+      and sh.sql_exec_id is not null            -- Donnent des r?sultats bizarres
 )
 ,stmt_duration as (
     select
@@ -84,6 +157,26 @@ with running_duration as (
       ,username
       ,sql_id
       ,sql_exec_id
+)
+,stmt_duration_hash as (
+    select
+       --
+       --   Collect interresting lines from the select above (same than stmt_duration, but group also by sql_plan_hash_value)
+       --
+       instance_number
+      ,username
+      ,sql_id
+      ,sql_exec_id
+      ,sql_plan_hash_value
+      ,max(duration_secs) duration_secs
+    from 
+      running_duration
+    group by
+       instance_number
+      ,username
+      ,sql_id
+      ,sql_exec_id
+      ,sql_plan_hash_value
 )
 ,stmt_duration_pre_pivot as (
      select 
@@ -109,6 +202,38 @@ with running_duration as (
        ,duration_secs
      from 
        stmt_duration
+     where 
+       --
+       --   To fiter long running statement , add criteria here
+       --
+       duration_secs >=0
+     order by instance_number,username
+)       
+,stmt_duration_pre_pivot_hash as (
+     select 
+        --
+        --    Prepare data for the PIVOT (Same than above but add sql_plan_hash_value)
+        --
+        instance_number
+       ,username
+       ,case
+         when duration_secs between 0          and 10        then '<=10 secs'
+         when duration_secs between 10         and 30        then '10-30 secs'
+         when duration_secs between 30         and 60        then '30-60 secs'
+         when duration_secs between 60         and (5*60)    then '1-5 mins'
+         when duration_secs between (5*60)     and (10*60)   then '5-10 mins'
+         when duration_secs between (10*60)    and (30*60)   then '10-30 mins'
+         when duration_secs between (30*60)    and (60*60)   then '30-60 mins'
+         when duration_secs between (3600)     and (2*3600)  then '1-2 h'
+         when duration_secs between (2*3600)   and (6*3600)  then '2-6 h'
+         when duration_secs between (6*3600)   and (12*3600) then '6-12 h'
+         else '> 12 h'
+        end duration_interval 
+       ,sql_id
+       ,sql_plan_hash_value
+       ,duration_secs
+     from 
+       stmt_duration_hash
      where 
        --
        --   To fiter long running statement , add criteria here
@@ -144,6 +269,13 @@ from stmt_duration sd
 join dba_hist_sqltext dt on (dt.sql_id = sd.sql_id)
 where sd.duration_secs >= 10
 order by 1,2
+/**************************************************************
+ *
+ *     Below are the different useful pivots to present
+ * the results in various ways. To use one, simply remove
+ * the space between star and slash in the comment 
+ *
+ **************************************************************/
 /* ------------------------------------------------------------- 
  * PIVOT 1 
  * =============================================================
@@ -195,6 +327,35 @@ select * from (select
                              s1.sql_id = s2.sql_id
                          and s2.duration_secs >= &long_running_time
                         )
+              )
+pivot ( count(duration_interval) for duration_interval in ( 
+              '<=10 secs' as C1  , '10-30 secs' as C2  , '30-60 secs' as C3
+             ,'1-5 mins'  as C4  , '5-10 mins'  as C5  , '10-30 mins' as C6  , '30-60 mins' as C7
+             ,'1-2 h'     as C8  , '2-6 h'      as C9  , '6-12 h'     as C10
+             ,'> 12 h'    as C11
+             )
+      )
+/* ------------------------------------------------------------- 
+ * PIVOT 3 
+ * =============================================================
+ *    Show durations for a specific SQLID
+ * ------------------------------------------------------------- 
+ * /
+select * from (select
+                  s1.sql_id||'/'||s1.sql_plan_hash_value SQL_ID_HASH
+                 ,s1.duration_interval 
+               from 
+                  stmt_duration_pre_pivot_hash s1
+               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id)
+               where
+               exists (select 
+                         1 
+                       from 
+                         stmt_duration_pre_pivot_hash s2
+                       where
+                             s1.sql_id = s2.sql_id
+                        )
+              and s1.sql_id = '&sql_ID'
               )
 pivot ( count(duration_interval) for duration_interval in ( 
               '<=10 secs' as C1  , '10-30 secs' as C2  , '30-60 secs' as C3
