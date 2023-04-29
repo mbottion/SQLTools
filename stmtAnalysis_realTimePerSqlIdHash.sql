@@ -230,7 +230,7 @@ with running_duration as (
        --
        --   To fiter long running statement , add criteria here
        --
-       duration_secs >=1800
+       duration_secs >=0
      order by instance_number,username
 )       
 ,stmt_duration_pre_pivot_hash as (
