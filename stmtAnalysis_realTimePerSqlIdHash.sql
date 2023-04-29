@@ -93,7 +93,6 @@ compute sum of c9  on report
 compute sum of c10 on report
 compute sum of c11  on report
 
-
 with running_duration as (
     select /*+PARALLEL(8)*/
       --
@@ -110,17 +109,32 @@ with running_duration as (
                                  when s.audsid is null then ''
                                  else ' (Running)'
                                end username
-      ,sh.sql_id
+      ,decode(nvl(qc_session_id,'-1'),-1,session_id,qc_session_id)                session_sid      -- Main session SID (to manage //)
+      ,decode(nvl(qc_session_serial#,'-1'),-1,session_serial#,qc_session_serial#) session_serial   -- Main session Serial (to manage //)
       ,sh.sql_exec_id
+      ,sh.sql_id
+      ,sh.sample_time
+      ,sh.sql_exec_start
       --
       -- Duration is the difference between the time a statement is first seen, and its last apparition for a given EXEC_ID
       --
-      ,(cast(sample_time as date) - cast(min(sh.sample_time) over (partition by sh.inst_id,sh.user_id,sh.sql_id,sh.sql_exec_id) as date))*3600*24 duration_secs
+      ,(cast(sample_time as date) - cast(min(sh.sample_time) over (partition by sh.inst_id
+                                                                               ,sh.user_id
+                                                                               ,sh.sql_id
+                                                                               ,sh.sql_exec_id
+                                                                               ,decode(nvl(qc_session_id,'-1'),-1,session_id,qc_session_id)
+                                                                               ,decode(nvl(qc_session_serial#,'-1'),-1,session_serial#,qc_session_serial#)
+                                        ) as date))*3600*24 duration_secs
       --
       --   Informational, just in case
       --
-      ,min(sh.sample_time) over (partition by sh.inst_id,sh.user_id,sh.sql_id,sh.sql_exec_id) start_time
-      ,sh.sample_time
+      ,min(sh.sample_time) over (partition by sh.inst_id
+                                             ,sh.user_id
+                                             ,sh.sql_id
+                                             ,sh.sql_exec_id
+                                             ,decode(nvl(qc_session_id,'-1'),-1,session_id,qc_session_id)
+                                             ,decode(nvl(qc_session_serial#,'-1'),-1,session_serial#,qc_session_serial#)
+                                ) start_time
       ,sh.program
       ,sh.sql_plan_hash_value
     from 
@@ -149,6 +163,8 @@ with running_duration as (
        --
        instance_number
       ,username
+      ,session_sid
+      ,session_serial
       ,sql_id
       ,sql_exec_id
       ,max(duration_secs) duration_secs
@@ -157,6 +173,8 @@ with running_duration as (
     group by
        instance_number
       ,username
+      ,session_sid
+      ,session_serial
       ,sql_id
       ,sql_exec_id
 )
@@ -167,6 +185,8 @@ with running_duration as (
        --
        instance_number
       ,username
+      ,session_sid
+      ,session_serial
       ,sql_id
       ,sql_exec_id
       ,sql_plan_hash_value
@@ -176,6 +196,8 @@ with running_duration as (
     group by
        instance_number
       ,username
+      ,session_sid
+      ,session_serial
       ,sql_id
       ,sql_exec_id
       ,sql_plan_hash_value
@@ -208,7 +230,7 @@ with running_duration as (
        --
        --   To fiter long running statement , add criteria here
        --
-       duration_secs >=0
+       duration_secs >=1800
      order by instance_number,username
 )       
 ,stmt_duration_pre_pivot_hash as (
@@ -248,28 +270,35 @@ with running_duration as (
  * ------------------------------------------------------------- 
  * /
 select * from running_duration
-where sql_id in ('dk2s1w258j6s5','dm8bxtj5r1vwj')
-order by 1,2,3,4,6
+where sql_id='&sql_id'
+order by 1,2,3,4,5,6
 /* -------------------------------------------------------------
  *    To see useful data
  * ------------------------------------------------------------- 
  * /
 select * from stmt_duration 
-where sql_id in ('dk2s1w258j6s5','dm8bxtj5r1vwj')
+where sql_id='&sql_id'
+/* -------------------------------------------------------------
+ *    To see useful data
+ * ------------------------------------------------------------- 
+ * /
+select * from stmt_duration_hash 
+where sql_id='&sql_id'
 /* -------------------------------------------------------------
  *    To see data for the pivot
  * ------------------------------------------------------------- 
  * /
-select * from stmt_duration_pre_pivot 
-where sql_id in ('dk2s1w258j6s5','dm8bxtj5r1vwj')
+select * from stmt_duration_pre_pivot_hash 
+where sql_id='&sql_id'
 /* -------------------------------------------------------------
  *    To see sql text
  * ------------------------------------------------------------- 
  * /
 select sd.*,dt.sql_text 
 from stmt_duration sd
-join dba_hist_sqltext dt on (dt.sql_id = sd.sql_id)
+join dba_hist_sqltext dt on (dt.sql_id = sd.sql_id and dt.dbid = (select dbid from v$database))
 where sd.duration_secs >= 10
+and dt.sql_id='&sql_id'
 order by 1,2
 /**************************************************************
  *
@@ -319,7 +348,7 @@ select * from (select
                  ,s1.duration_interval 
                from 
                   stmt_duration_pre_pivot s1
-               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id)
+               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id and dt.dbid = (select dbid from v$database) )
                where
                exists (select 
                          1 
@@ -348,7 +377,7 @@ select * from (select
                  ,s1.duration_interval 
                from 
                   stmt_duration_pre_pivot_hash s1
-               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id)
+--               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id and dt.dbid = (select dbid from v$database) )
                where
                exists (select 
                          1 
@@ -369,3 +398,4 @@ pivot ( count(duration_interval) for duration_interval in (
 order by 1, 2
 /* ************************************************************************** */
 /
+
