@@ -62,19 +62,20 @@ set head on
 set pages 10000
 
 
-col instance_number format 999     heading "Inst."
+
+nstance_number format 999     heading "Inst."
 col username        format a30     heading "User"
-col C1              format 999G999 heading "<=10 secs"
-col C2              format 999G999 heading "10-30 secs"
-col C3              format 999G999 heading "30-60 secs"
-col C4              format 999G999 heading "1-5 mins"
-col C5              format 999G999 heading "5-10 mins"
-col C6              format 999G999 heading "10-30 mins"
-col C7              format 999G999 heading "30-60 mins"
-col C8              format 999G999 heading "1-2 h"
-col C9              format 999G999 heading "2-6 h"
-col C10             format 999G999 heading "6-12 h"
-col C11             format 999G999 heading "> 12 h"
+col C1              format 999G999 heading "0-10 secs"
+col C2              format 999G999 heading "10-20 secs"
+col C3              format 999G999 heading "20-30 secs"
+col C4              format 999G999 heading "30-40 secs"
+col C5              format 999G999 heading "40-50 secs"
+col C6              format 999G999 heading "50-60 secs"
+col C7              format 999G999 heading "1-5 mins"
+col C8              format 999G999 heading "5-10 mins"
+col C9              format 999G999 heading "10-30 mins"
+col C10             format 999G999 heading "30-60 mins"
+col C11             format 999G999 heading "> 1 h"
 col SQL_ID_HASH     format a35     heading "SQL ID/PLan Hash"
 col sql_text        format a50     word_wrapped
 
@@ -91,7 +92,6 @@ compute sum of c9  on report
 compute sum of c10 on report
 compute sum of c11  on report
 
-
 with running_duration as (
     select /*+PARALLEL(8)*/
       --
@@ -103,22 +103,37 @@ with running_duration as (
       --    which keeps a track of each session every second, but the number of lines may not
       --    cover a full day
       --
-       ds.instance_number
+       sh.instance_number
       ,rpad(du.username,20) || case 
                                  when s.audsid is null then ''
                                  else ' (Running)'
                                end username
-      ,sh.sql_id
+      ,decode(nvl(qc_session_id,'-1'),-1,session_id,qc_session_id)                session_sid      -- Main session SID (to manage //)
+      ,decode(nvl(qc_session_serial#,'-1'),-1,session_serial#,qc_session_serial#) session_serial   -- Main session Serial (to manage //)
       ,sh.sql_exec_id
+      ,sh.sql_id
+      ,sh.sample_time
+      ,sh.sql_exec_start
       --
       -- Duration is the difference between the time a statement is first seen, and its last apparition for a given EXEC_ID
       --
-      ,(cast(sample_time as date) - cast(min(sh.sample_time) over (partition by ds.instance_number,sh.user_id,sh.sql_id,sh.sql_exec_id) as date))*3600*24 duration_secs
+      ,(cast(sample_time as date) - cast(min(sh.sample_time) over (partition by sh.instance_number
+                                                                               ,sh.user_id
+                                                                               ,sh.sql_id
+                                                                               ,sh.sql_exec_id
+                                                                               ,decode(nvl(qc_session_id,'-1'),-1,session_id,qc_session_id)
+                                                                               ,decode(nvl(qc_session_serial#,'-1'),-1,session_serial#,qc_session_serial#)
+                                        ) as date))*3600*24 duration_secs
       --
       --   Informational, just in case
       --
-      ,min(sh.sample_time) over (partition by ds.instance_number,sh.user_id,sh.sql_id,sh.sql_exec_id) start_time
-      ,sh.sample_time
+      ,min(sh.sample_time) over (partition by sh.instance_number
+                                             ,sh.user_id
+                                             ,sh.sql_id
+                                             ,sh.sql_exec_id
+                                             ,decode(nvl(qc_session_id,'-1'),-1,session_id,qc_session_id)
+                                             ,decode(nvl(qc_session_serial#,'-1'),-1,session_serial#,qc_session_serial#)
+                                ) start_time
       ,sh.program
       ,sh.sql_plan_hash_value
     from 
@@ -147,6 +162,8 @@ with running_duration as (
        --
        instance_number
       ,username
+      ,session_sid
+      ,session_serial
       ,sql_id
       ,sql_exec_id
       ,max(duration_secs) duration_secs
@@ -155,6 +172,8 @@ with running_duration as (
     group by
        instance_number
       ,username
+      ,session_sid
+      ,session_serial
       ,sql_id
       ,sql_exec_id
 )
@@ -165,6 +184,8 @@ with running_duration as (
        --
        instance_number
       ,username
+      ,session_sid
+      ,session_serial
       ,sql_id
       ,sql_exec_id
       ,sql_plan_hash_value
@@ -174,6 +195,8 @@ with running_duration as (
     group by
        instance_number
       ,username
+      ,session_sid
+      ,session_serial
       ,sql_id
       ,sql_exec_id
       ,sql_plan_hash_value
@@ -186,17 +209,17 @@ with running_duration as (
         instance_number
        ,username
        ,case
-         when duration_secs between 0          and 10        then '<=10 secs'
-         when duration_secs between 10         and 30        then '10-30 secs'
-         when duration_secs between 30         and 60        then '30-60 secs'
+         when duration_secs between 0          and 10        then '0-10 secs'
+         when duration_secs between 10         and 20        then '10-20 secs'
+         when duration_secs between 20         and 30        then '20-30 secs'
+         when duration_secs between 30         and 40        then '30-40 secs'
+         when duration_secs between 40         and 50        then '40-50 secs'
+         when duration_secs between 50         and 60        then '50-60 secs'
          when duration_secs between 60         and (5*60)    then '1-5 mins'
          when duration_secs between (5*60)     and (10*60)   then '5-10 mins'
          when duration_secs between (10*60)    and (30*60)   then '10-30 mins'
          when duration_secs between (30*60)    and (60*60)   then '30-60 mins'
-         when duration_secs between (3600)     and (2*3600)  then '1-2 h'
-         when duration_secs between (2*3600)   and (6*3600)  then '2-6 h'
-         when duration_secs between (6*3600)   and (12*3600) then '6-12 h'
-         else '> 12 h'
+         else '> 1 h'
         end duration_interval 
        ,sql_id
        ,duration_secs
@@ -217,17 +240,17 @@ with running_duration as (
         instance_number
        ,username
        ,case
-         when duration_secs between 0          and 10        then '<=10 secs'
-         when duration_secs between 10         and 30        then '10-30 secs'
-         when duration_secs between 30         and 60        then '30-60 secs'
+         when duration_secs between 0          and 10        then '0-10 secs'
+         when duration_secs between 10         and 20        then '10-20 secs'
+         when duration_secs between 20         and 30        then '20-30 secs'
+         when duration_secs between 30         and 40        then '30-40 secs'
+         when duration_secs between 40         and 50        then '40-50 secs'
+         when duration_secs between 50         and 60        then '50-60 secs'
          when duration_secs between 60         and (5*60)    then '1-5 mins'
          when duration_secs between (5*60)     and (10*60)   then '5-10 mins'
          when duration_secs between (10*60)    and (30*60)   then '10-30 mins'
          when duration_secs between (30*60)    and (60*60)   then '30-60 mins'
-         when duration_secs between (3600)     and (2*3600)  then '1-2 h'
-         when duration_secs between (2*3600)   and (6*3600)  then '2-6 h'
-         when duration_secs between (6*3600)   and (12*3600) then '6-12 h'
-         else '> 12 h'
+         else '> 1 h'
         end duration_interval 
        ,sql_id
        ,sql_plan_hash_value
@@ -246,28 +269,35 @@ with running_duration as (
  * ------------------------------------------------------------- 
  * /
 select * from running_duration
-where sql_id in ('dk2s1w258j6s5','dm8bxtj5r1vwj')
-order by 1,2,3,4,6
+where sql_id='&sql_id'
+order by 1,2,3,4,5,6
 /* -------------------------------------------------------------
  *    To see useful data
  * ------------------------------------------------------------- 
  * /
 select * from stmt_duration 
-where sql_id in ('dk2s1w258j6s5','dm8bxtj5r1vwj')
+where sql_id='&sql_id'
+/* -------------------------------------------------------------
+ *    To see useful data
+ * ------------------------------------------------------------- 
+ * /
+select * from stmt_duration_hash 
+where sql_id='&sql_id'
 /* -------------------------------------------------------------
  *    To see data for the pivot
  * ------------------------------------------------------------- 
  * /
-select * from stmt_duration_pre_pivot 
-where sql_id in ('dk2s1w258j6s5','dm8bxtj5r1vwj')
+select * from stmt_duration_pre_pivot_hash 
+where sql_id='&sql_id'
 /* -------------------------------------------------------------
  *    To see sql text
  * ------------------------------------------------------------- 
  * /
 select sd.*,dt.sql_text 
 from stmt_duration sd
-join dba_hist_sqltext dt on (dt.sql_id = sd.sql_id)
+join dba_hist_sqltext dt on (dt.sql_id = sd.sql_id and dt.dbid = (select dbid from v$database))
 where sd.duration_secs >= 10
+and dt.sql_id='&sql_id'
 order by 1,2
 /**************************************************************
  *
@@ -293,10 +323,10 @@ select * from (select
                   stmt_duration_pre_pivot
               )
 pivot ( count(duration_interval) for duration_interval in ( 
-              '<=10 secs' as C1  , '10-30 secs' as C2  , '30-60 secs' as C3
-             ,'1-5 mins'  as C4  , '5-10 mins'  as C5  , '10-30 mins' as C6  , '30-60 mins' as C7
-             ,'1-2 h'     as C8  , '2-6 h'      as C9  , '6-12 h'     as C10
-             ,'> 12 h'    as C11
+              '0-10 secs'   as C1  , '10-20 secs'  as C2  , '20-30 secs'  as C3
+             ,'30-40 secs'  as C4  , '40-50 secs'  as C5  , '50-60 secs'  as C6  , '1-5 mins' as C7
+             ,'5-10 mins'   as C8  , '10-30 mins'  as C9  , '30-60 mins'  as C10
+             ,'> 1 h'       as C11
              )
       )
 order by 1, 2
@@ -317,7 +347,7 @@ select * from (select
                  ,s1.duration_interval 
                from 
                   stmt_duration_pre_pivot s1
-               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id)
+               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id and dt.dbid = (select dbid from v$database) )
                where
                exists (select 
                          1 
@@ -329,10 +359,10 @@ select * from (select
                         )
               )
 pivot ( count(duration_interval) for duration_interval in ( 
-              '<=10 secs' as C1  , '10-30 secs' as C2  , '30-60 secs' as C3
-             ,'1-5 mins'  as C4  , '5-10 mins'  as C5  , '10-30 mins' as C6  , '30-60 mins' as C7
-             ,'1-2 h'     as C8  , '2-6 h'      as C9  , '6-12 h'     as C10
-             ,'> 12 h'    as C11
+              '0-10 secs'   as C1  , '10-20 secs'  as C2  , '20-30 secs'  as C3
+             ,'30-40 secs'  as C4  , '40-50 secs'  as C5  , '50-60 secs'  as C6  , '1-5 mins' as C7
+             ,'5-10 mins'   as C8  , '10-30 mins'  as C9  , '30-60 mins'  as C10
+             ,'> 1 h'       as C11
              )
       )
 /* ------------------------------------------------------------- 
@@ -346,7 +376,7 @@ select * from (select
                  ,s1.duration_interval 
                from 
                   stmt_duration_pre_pivot_hash s1
-               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id)
+--               join dba_hist_sqltext dt on (dt.sql_id = s1.sql_id and dt.dbid = (select dbid from v$database) )
                where
                exists (select 
                          1 
@@ -358,12 +388,13 @@ select * from (select
               and s1.sql_id = '&sql_ID'
               )
 pivot ( count(duration_interval) for duration_interval in ( 
-              '<=10 secs' as C1  , '10-30 secs' as C2  , '30-60 secs' as C3
-             ,'1-5 mins'  as C4  , '5-10 mins'  as C5  , '10-30 mins' as C6  , '30-60 mins' as C7
-             ,'1-2 h'     as C8  , '2-6 h'      as C9  , '6-12 h'     as C10
-             ,'> 12 h'    as C11
+              '0-10 secs'   as C1  , '10-20 secs'  as C2  , '20-30 secs'  as C3
+             ,'30-40 secs'  as C4  , '40-50 secs'  as C5  , '50-60 secs'  as C6  , '1-5 mins' as C7
+             ,'5-10 mins'   as C8  , '10-30 mins'  as C9  , '30-60 mins'  as C10
+             ,'> 1 h'       as C11
              )
       )
 order by 1, 2
 /* ************************************************************************** */
 /
+
