@@ -135,7 +135,7 @@ with running_duration as (
                                  and s.inst_id = sh.instance_number)
     where 
           sh.session_type='FOREGROUND'          -- Only user sessions
-      and du.username not in ('SYS','SYSTEM')   -- Filter unneeded users
+--      and du.username not in ('SYS','SYSTEM')   -- Filter unneeded users
       and sh.sample_time between &start_date_FR and &end_date_FR
       and sh.sql_id is not null                 -- Sessions qui n'ont rien ex?cut??
       and sh.sql_exec_id is not null            -- Donnent des r?sultats bizarres
