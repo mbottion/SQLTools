@@ -91,6 +91,42 @@ where
 order by BEGIN_INTERVAL_TIME
 /
 
+prompt
+prompt ==================================================================================
+prompt Execution times per PLAN
+prompt ==================================================================================
+prompt
+
+col plan format a20
+col min_time format 999G999D99
+col avg_time format 999G999D99
+col max_time format 999G999D99
+col cnt format 999G999
+
+select
+   to_char(PLAN_HASH_VALUE) plan
+  ,min(elapsed_real) min_time
+  ,avg(elapsed_real) avg_time 
+  ,max(elapsed_real) max_time
+  ,count(PLAN_HASH_VALUE) Cnt
+from (
+      select
+         sql.PLAN_HASH_VALUE
+        ,case when sql.PX_SERVERS_EXECS_TOTAL = 0 then sql.ELAPSED_TIME_TOTAL/1000000 else (sql.ELAPSED_TIME_TOTAL/1000000)/sql.PX_SERVERS_EXECS_TOTAL end elapsed_real
+      from
+        dba_hist_sqlstat     sql
+      join dba_hist_snapshot snap on (    sql.snap_id         = snap.snap_id
+                                      and sql.dbid            = snap.dbid
+                                      and sql.instance_number = snap.instance_number
+                                      )
+      where
+        sql.sql_id = '&SQL_ID'
+                   and BEGIN_INTERVAL_TIME between &start_date_FR and &end_date_FR
+     )
+group by
+  PLAN_HASH_VALUE
+order by 3 desc
+/
 
 prompt
 prompt ==================================================================================
