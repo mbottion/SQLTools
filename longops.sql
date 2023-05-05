@@ -1,4 +1,5 @@
 set lines 200
+set pages 200
 col module format a50
 col elapsed_seconds format 999G999G990
 col Progress format a10
