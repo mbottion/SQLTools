@@ -3,7 +3,7 @@ col module format a50
 col elapsed_seconds format 999G999G990
 col Progress format a10
 col action format a20
-col opname format a20
+col opname format a40
 col inst_id format 99
 col sid format 9999999
 col serial# format 999999
