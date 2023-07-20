@@ -1,2 +1,0 @@
-set timing on
-EXEC DBMS_STATS.GATHER_TABLE_STATS('SYS', 'X$KTFBUE');
