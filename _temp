@@ -17,7 +17,8 @@
 # Generated files:
 #   010_table_<table>.sql
 #     CREATE TABLE DDL, table comments, column comments, and non-referential
-#     constraints. Referential constraints are intentionally excluded.
+#     constraints, plus non-constraint indexes on the table. Referential
+#     constraints are intentionally excluded.
 #
 #   020_referential_constraints.sql
 #     All foreign key constraints for the connected user's schema.
@@ -25,7 +26,6 @@
 #   030_sequences.sql
 #     All standalone sequences, excluding Oracle identity-column sequences.
 #
-#   040_index_<index>.sql
 #   050_view_<view>.sql
 #   051_mview_<materialized_view>.sql
 #   070_procedure_<procedure>.sql
@@ -34,7 +34,6 @@
 #   090_type_<type>.sql
 #   091_type_body_<type>.sql
 #   092_synonym_<synonym>.sql
-#   093_dblink_<database_link>.sql
 #     One file per object of the matching type.
 #
 #   060_package_<package>.pks
@@ -91,6 +90,8 @@ set linesize 32767
 set long 1000000000
 set longchunksize 32767
 set trimspool on
+set termout on
+prompt Generating extractor...
 set termout off
 
 define output_dir = '__OUTPUT_DIR__'
@@ -148,6 +149,17 @@ table_commands as (
          'where table_name = ''' || replace(table_name, '''', '''''') || '''' || chr(10) ||
          'and comments is not null' || chr(10) ||
          'order by column_name;' || chr(10) ||
+         'select dbms_metadata.get_ddl(''INDEX'', i.index_name) || chr(10) as ddl' || chr(10) ||
+         'from user_indexes i' || chr(10) ||
+         'where i.table_name = ''' || replace(table_name, '''', '''''') || '''' || chr(10) ||
+         'and i.index_name not like ''BIN$%''' || chr(10) ||
+         'and not exists (' || chr(10) ||
+         '  select 1' || chr(10) ||
+         '  from user_constraints c' || chr(10) ||
+         '  where c.index_name = i.index_name' || chr(10) ||
+         '  and c.constraint_type in (''P'', ''U'')' || chr(10) ||
+         ')' || chr(10) ||
+         'order by i.index_name;' || chr(10) ||
          'spool off' || chr(10) as ddl_command
   from user_tables
   cross join params
@@ -223,7 +235,6 @@ group_commands as (
 ),
 object_commands as (
   select case o.object_type
-           when 'INDEX' then 400
            when 'VIEW' then 500
            when 'MATERIALIZED VIEW' then 510
            when 'PACKAGE' then 600
@@ -234,10 +245,8 @@ object_commands as (
            when 'TYPE' then 900
            when 'TYPE BODY' then 910
            when 'SYNONYM' then 920
-           when 'DATABASE LINK' then 930
          end as sort_order,
          case o.object_type
-           when 'INDEX' then '040_index_'
            when 'VIEW' then '050_view_'
            when 'MATERIALIZED VIEW' then '051_mview_'
            when 'PACKAGE' then '060_package_'
@@ -248,7 +257,6 @@ object_commands as (
            when 'TYPE' then '090_type_'
            when 'TYPE BODY' then '091_type_body_'
            when 'SYNONYM' then '092_synonym_'
-           when 'DATABASE LINK' then '093_dblink_'
          end ||
          regexp_replace(lower(o.object_name), '[^[:alnum:]_.-]+', '_') ||
          case o.object_type
@@ -259,7 +267,6 @@ object_commands as (
          'set termout on' || chr(10) ||
          'prompt Extracting ' ||
          case o.object_type
-           when 'INDEX' then '040_index_'
            when 'VIEW' then '050_view_'
            when 'MATERIALIZED VIEW' then '051_mview_'
            when 'PACKAGE' then '060_package_'
@@ -270,7 +277,6 @@ object_commands as (
            when 'TYPE' then '090_type_'
            when 'TYPE BODY' then '091_type_body_'
            when 'SYNONYM' then '092_synonym_'
-           when 'DATABASE LINK' then '093_dblink_'
          end ||
          regexp_replace(lower(o.object_name), '[^[:alnum:]_.-]+', '_') ||
          case o.object_type
@@ -283,7 +289,6 @@ object_commands as (
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''REF_CONSTRAINTS'', false);' || chr(10) ||
          'spool ' || p.output_dir || '/' ||
          case o.object_type
-           when 'INDEX' then '040_index_'
            when 'VIEW' then '050_view_'
            when 'MATERIALIZED VIEW' then '051_mview_'
            when 'PACKAGE' then '060_package_'
@@ -294,7 +299,6 @@ object_commands as (
            when 'TYPE' then '090_type_'
            when 'TYPE BODY' then '091_type_body_'
            when 'SYNONYM' then '092_synonym_'
-           when 'DATABASE LINK' then '093_dblink_'
          end ||
          regexp_replace(lower(o.object_name), '[^[:alnum:]_.-]+', '_') ||
          case o.object_type
@@ -304,7 +308,6 @@ object_commands as (
          end || chr(10) ||
          'select dbms_metadata.get_ddl(''' ||
          case o.object_type
-           when 'DATABASE LINK' then 'DB_LINK'
            when 'MATERIALIZED VIEW' then 'MATERIALIZED_VIEW'
            when 'PACKAGE BODY' then 'PACKAGE_BODY'
            when 'TYPE BODY' then 'TYPE_BODY'
@@ -315,7 +318,6 @@ object_commands as (
   from user_objects o
   cross join params p
   where o.object_type in (
-    'INDEX',
     'VIEW',
     'MATERIALIZED VIEW',
     'PACKAGE',
@@ -325,8 +327,7 @@ object_commands as (
     'TRIGGER',
     'TYPE',
     'TYPE BODY',
-    'SYNONYM',
-    'DATABASE LINK'
+    'SYNONYM'
   )
   and o.object_name not like 'BIN$%'
 )
