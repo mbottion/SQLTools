@@ -52,10 +52,10 @@ table_commands as (
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS'', true);' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''REF_CONSTRAINTS'', false);' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS_AS_ALTER'', false);' || chr(10) ||
-         'spool "' || output_dir || '/010_table_' ||
-           regexp_replace(lower(table_name), '[^[:alnum:]_.-]+', '_') || '.sql"' || chr(10) ||
-         'select replace(dbms_metadata.get_ddl(''TABLE'', ''' ||
-           replace(table_name, '''', '''''') || '''), ''"'', '''') as ddl from dual;' || chr(10) ||
+         'spool ' || output_dir || '/010_table_' ||
+           regexp_replace(lower(table_name), '[^[:alnum:]_.-]+', '_') || '.sql' || chr(10) ||
+         'select dbms_metadata.get_ddl(''TABLE'', ''' ||
+           replace(table_name, '''', '''''') || ''') as ddl from dual;' || chr(10) ||
          q'[select 'comment on table ' || table_name || ' is ''' || replace(comments, '''', '''''') || ''';' as ddl]' || chr(10) ||
          'from user_tab_comments' || chr(10) ||
          'where table_name = ''' || replace(table_name, '''', '''''') || '''' || chr(10) ||
@@ -75,8 +75,8 @@ group_commands as (
          '020_referential_constraints.sql' as file_name,
          'prompt Writing ' || output_dir || '/020_referential_constraints.sql' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS_AS_ALTER'', true);' || chr(10) ||
-         'spool "' || output_dir || '/020_referential_constraints.sql"' || chr(10) ||
-         'select replace(dbms_metadata.get_ddl(''REF_CONSTRAINT'', constraint_name), ''"'', '''') as ddl' || chr(10) ||
+         'spool ' || output_dir || '/020_referential_constraints.sql' || chr(10) ||
+         'select dbms_metadata.get_ddl(''REF_CONSTRAINT'', constraint_name) as ddl' || chr(10) ||
          'from user_constraints' || chr(10) ||
          'where constraint_type = ''R''' || chr(10) ||
          'order by table_name, constraint_name;' || chr(10) ||
@@ -86,8 +86,8 @@ group_commands as (
   select 300 as sort_order,
          '030_sequences.sql' as file_name,
          'prompt Writing ' || output_dir || '/030_sequences.sql' || chr(10) ||
-         'spool "' || output_dir || '/030_sequences.sql"' || chr(10) ||
-         'select replace(dbms_metadata.get_ddl(''SEQUENCE'', s.sequence_name), ''"'', '''') as ddl' || chr(10) ||
+         'spool ' || output_dir || '/030_sequences.sql' || chr(10) ||
+         'select dbms_metadata.get_ddl(''SEQUENCE'', s.sequence_name) as ddl' || chr(10) ||
          'from user_sequences s' || chr(10) ||
          'where substr(s.sequence_name, 1, 7) <> ''ISEQ$$_''' || chr(10) ||
          'and not exists (' || chr(10) ||
@@ -158,7 +158,7 @@ object_commands as (
          end || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS'', false);' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''REF_CONSTRAINTS'', false);' || chr(10) ||
-         'spool "' || p.output_dir || '/' ||
+         'spool ' || p.output_dir || '/' ||
          case o.object_type
            when 'INDEX' then '040_index_'
            when 'VIEW' then '050_view_'
@@ -178,8 +178,8 @@ object_commands as (
            when 'PACKAGE' then '.pks'
            when 'PACKAGE BODY' then '.pkb'
            else '.sql'
-         end || '"' || chr(10) ||
-         'select replace(dbms_metadata.get_ddl(''' ||
+         end || chr(10) ||
+         'select dbms_metadata.get_ddl(''' ||
          case o.object_type
            when 'DATABASE LINK' then 'DB_LINK'
            when 'MATERIALIZED VIEW' then 'MATERIALIZED_VIEW'
@@ -187,7 +187,7 @@ object_commands as (
            when 'TYPE BODY' then 'TYPE_BODY'
            else replace(o.object_type, ' ', '_')
          end || ''', ''' ||
-         replace(o.object_name, '''', '''''') || '''), ''"'', '''') as ddl from dual;' || chr(10) ||
+         replace(o.object_name, '''', '''''') || ''') as ddl from dual;' || chr(10) ||
          'spool off' || chr(10) as ddl_command
   from user_objects o
   cross join params p
