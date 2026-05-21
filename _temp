@@ -1,0 +1,230 @@
+-- Export the currently connected Oracle user's DDL to client-side files.
+-- Files are written by SQL*Plus SPOOL on the client machine.
+
+set echo off
+set verify off
+set feedback off
+set heading off
+set pagesize 0
+set linesize 32767
+set long 1000000000
+set longchunksize 32767
+set trimspool on
+set termout off
+
+define output_dir = '__OUTPUT_DIR__'
+define runner_file = 'export_schema_ddl_run.sql'
+
+column ddl_command format a32767
+
+spool &&runner_file
+
+prompt set echo off
+prompt set verify off
+prompt set feedback off
+prompt set heading off
+prompt set pagesize 0
+prompt set linesize 32767
+prompt set long 1000000000
+prompt set longchunksize 32767
+prompt set trimspool on
+prompt set termout on
+prompt column ddl format a32767
+prompt
+prompt exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'PRETTY', true);
+prompt exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'SQLTERMINATOR', true);
+prompt exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'SEGMENT_ATTRIBUTES', true);
+prompt exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'STORAGE', true);
+prompt
+
+with params as (
+  select user as owner,
+         rtrim(replace('&&output_dir', '\', '/'), '/') as output_dir
+  from dual
+),
+table_commands as (
+  select 100 as sort_order,
+         '010_table_' ||
+           regexp_replace(lower(table_name), '[^[:alnum:]_.-]+', '_') ||
+           '.sql' as file_name,
+         'prompt Writing ' || output_dir || '/010_table_' ||
+           regexp_replace(lower(table_name), '[^[:alnum:]_.-]+', '_') || '.sql' || chr(10) ||
+         'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS'', true);' || chr(10) ||
+         'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''REF_CONSTRAINTS'', false);' || chr(10) ||
+         'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS_AS_ALTER'', false);' || chr(10) ||
+         'spool "' || output_dir || '/010_table_' ||
+           regexp_replace(lower(table_name), '[^[:alnum:]_.-]+', '_') || '.sql"' || chr(10) ||
+         'select dbms_metadata.get_ddl(''TABLE'', ''' ||
+           replace(table_name, '''', '''''') || ''') as ddl from dual;' || chr(10) ||
+         q'[select 'comment on table "' || replace(table_name, '"', '""') || '" is ''' || replace(comments, '''', '''''') || ''';' as ddl]' || chr(10) ||
+         'from user_tab_comments' || chr(10) ||
+         'where table_name = ''' || replace(table_name, '''', '''''') || '''' || chr(10) ||
+         'and comments is not null;' || chr(10) ||
+         q'[select 'comment on column "' || replace(table_name, '"', '""') || '"."' || replace(column_name, '"', '""') || '" is ''' || replace(comments, '''', '''''') || ''';' as ddl]' || chr(10) ||
+         'from user_col_comments' || chr(10) ||
+         'where table_name = ''' || replace(table_name, '''', '''''') || '''' || chr(10) ||
+         'and comments is not null' || chr(10) ||
+         'order by column_name;' || chr(10) ||
+         'spool off' || chr(10) as ddl_command
+  from user_tables
+  cross join params
+  where table_name not like 'BIN$%'
+),
+group_commands as (
+  select 200 as sort_order,
+         '020_referential_constraints.sql' as file_name,
+         'prompt Writing ' || output_dir || '/020_referential_constraints.sql' || chr(10) ||
+         'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS_AS_ALTER'', true);' || chr(10) ||
+         'spool "' || output_dir || '/020_referential_constraints.sql"' || chr(10) ||
+         'select dbms_metadata.get_ddl(''REF_CONSTRAINT'', constraint_name) as ddl' || chr(10) ||
+         'from user_constraints' || chr(10) ||
+         'where constraint_type = ''R''' || chr(10) ||
+         'order by table_name, constraint_name;' || chr(10) ||
+         'spool off' || chr(10) as ddl_command
+  from params
+  union all
+  select 300 as sort_order,
+         '030_sequences.sql' as file_name,
+         'prompt Writing ' || output_dir || '/030_sequences.sql' || chr(10) ||
+         'spool "' || output_dir || '/030_sequences.sql"' || chr(10) ||
+         'select dbms_metadata.get_ddl(''SEQUENCE'', s.sequence_name) as ddl' || chr(10) ||
+         'from user_sequences s' || chr(10) ||
+         'where substr(s.sequence_name, 1, 7) <> ''ISEQ$$_''' || chr(10) ||
+         'and not exists (' || chr(10) ||
+         '  select 1' || chr(10) ||
+         '  from user_tab_identity_cols ic' || chr(10) ||
+         '  join user_objects o on o.object_name = ic.table_name and o.object_type = ''TABLE''' || chr(10) ||
+         '  where s.sequence_name = ''ISEQ$$_'' || o.object_id' || chr(10) ||
+         ')' || chr(10) ||
+         'order by s.sequence_name;' || chr(10) ||
+         'spool off' || chr(10) as ddl_command
+  from params
+),
+object_commands as (
+  select case o.object_type
+           when 'INDEX' then 400
+           when 'VIEW' then 500
+           when 'MATERIALIZED VIEW' then 510
+           when 'PACKAGE' then 600
+           when 'PACKAGE BODY' then 610
+           when 'PROCEDURE' then 700
+           when 'FUNCTION' then 710
+           when 'TRIGGER' then 800
+           when 'TYPE' then 900
+           when 'TYPE BODY' then 910
+           when 'SYNONYM' then 920
+           when 'DATABASE LINK' then 930
+         end as sort_order,
+         case o.object_type
+           when 'INDEX' then '040_index_'
+           when 'VIEW' then '050_view_'
+           when 'MATERIALIZED VIEW' then '051_mview_'
+           when 'PACKAGE' then '060_package_'
+           when 'PACKAGE BODY' then '061_package_body_'
+           when 'PROCEDURE' then '070_procedure_'
+           when 'FUNCTION' then '071_function_'
+           when 'TRIGGER' then '080_trigger_'
+           when 'TYPE' then '090_type_'
+           when 'TYPE BODY' then '091_type_body_'
+           when 'SYNONYM' then '092_synonym_'
+           when 'DATABASE LINK' then '093_dblink_'
+         end ||
+         regexp_replace(lower(o.object_name), '[^[:alnum:]_.-]+', '_') ||
+         case o.object_type
+           when 'PACKAGE' then '.pks'
+           when 'PACKAGE BODY' then '.pkb'
+           else '.sql'
+         end as file_name,
+         'prompt Writing ' || p.output_dir || '/' ||
+         case o.object_type
+           when 'INDEX' then '040_index_'
+           when 'VIEW' then '050_view_'
+           when 'MATERIALIZED VIEW' then '051_mview_'
+           when 'PACKAGE' then '060_package_'
+           when 'PACKAGE BODY' then '061_package_body_'
+           when 'PROCEDURE' then '070_procedure_'
+           when 'FUNCTION' then '071_function_'
+           when 'TRIGGER' then '080_trigger_'
+           when 'TYPE' then '090_type_'
+           when 'TYPE BODY' then '091_type_body_'
+           when 'SYNONYM' then '092_synonym_'
+           when 'DATABASE LINK' then '093_dblink_'
+         end ||
+         regexp_replace(lower(o.object_name), '[^[:alnum:]_.-]+', '_') ||
+         case o.object_type
+           when 'PACKAGE' then '.pks'
+           when 'PACKAGE BODY' then '.pkb'
+           else '.sql'
+         end || chr(10) ||
+         'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS'', false);' || chr(10) ||
+         'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''REF_CONSTRAINTS'', false);' || chr(10) ||
+         'spool "' || p.output_dir || '/' ||
+         case o.object_type
+           when 'INDEX' then '040_index_'
+           when 'VIEW' then '050_view_'
+           when 'MATERIALIZED VIEW' then '051_mview_'
+           when 'PACKAGE' then '060_package_'
+           when 'PACKAGE BODY' then '061_package_body_'
+           when 'PROCEDURE' then '070_procedure_'
+           when 'FUNCTION' then '071_function_'
+           when 'TRIGGER' then '080_trigger_'
+           when 'TYPE' then '090_type_'
+           when 'TYPE BODY' then '091_type_body_'
+           when 'SYNONYM' then '092_synonym_'
+           when 'DATABASE LINK' then '093_dblink_'
+         end ||
+         regexp_replace(lower(o.object_name), '[^[:alnum:]_.-]+', '_') ||
+         case o.object_type
+           when 'PACKAGE' then '.pks'
+           when 'PACKAGE BODY' then '.pkb'
+           else '.sql'
+         end || '"' || chr(10) ||
+         'select dbms_metadata.get_ddl(''' ||
+         case o.object_type
+           when 'DATABASE LINK' then 'DB_LINK'
+           when 'MATERIALIZED VIEW' then 'MATERIALIZED_VIEW'
+           when 'PACKAGE BODY' then 'PACKAGE_BODY'
+           when 'TYPE BODY' then 'TYPE_BODY'
+           else replace(o.object_type, ' ', '_')
+         end || ''', ''' ||
+         replace(o.object_name, '''', '''''') || ''') as ddl from dual;' || chr(10) ||
+         'spool off' || chr(10) as ddl_command
+  from user_objects o
+  cross join params p
+  where o.object_type in (
+    'INDEX',
+    'VIEW',
+    'MATERIALIZED VIEW',
+    'PACKAGE',
+    'PACKAGE BODY',
+    'PROCEDURE',
+    'FUNCTION',
+    'TRIGGER',
+    'TYPE',
+    'TYPE BODY',
+    'SYNONYM',
+    'DATABASE LINK'
+  )
+  and o.object_name not like 'BIN$%'
+)
+select ddl_command
+from (
+  select sort_order, file_name, ddl_command from table_commands
+  union all
+  select sort_order, file_name, ddl_command from group_commands
+  union all
+  select sort_order, file_name, ddl_command from object_commands
+)
+order by sort_order, file_name;
+
+prompt
+prompt prompt Done.
+prompt exit
+
+spool off
+
+set termout on
+prompt Generated &&runner_file
+prompt Exporting current schema to client directory &&output_dir
+
+@&&runner_file
