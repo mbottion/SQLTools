@@ -1,3 +1,84 @@
+#!/usr/bin/env bash
+#
+# Export the currently connected Oracle user's schema DDL to client-side files.
+#
+# Usage:
+#   ./export_schema_ddl.sh user/password@database /path/to/output_dir
+#
+# This script builds a temporary SQL*Plus script, then executes it through an
+# existing shell function/command named exec_sql:
+#
+#   exec_sql connect_string script_path
+#
+# exec_sql is expected to handle the actual SQL*Plus invocation. The generated
+# SQL uses USER_* dictionary views, so it exports only the schema owned by the
+# connected user.
+#
+# Generated files:
+#   010_table_<table>.sql
+#     CREATE TABLE DDL, table comments, column comments, and non-referential
+#     constraints. Referential constraints are intentionally excluded.
+#
+#   020_referential_constraints.sql
+#     All foreign key constraints for the connected user's schema.
+#
+#   030_sequences.sql
+#     All standalone sequences, excluding Oracle identity-column sequences.
+#
+#   040_index_<index>.sql
+#   050_view_<view>.sql
+#   051_mview_<materialized_view>.sql
+#   070_procedure_<procedure>.sql
+#   071_function_<function>.sql
+#   080_trigger_<trigger>.sql
+#   090_type_<type>.sql
+#   091_type_body_<type>.sql
+#   092_synonym_<synonym>.sql
+#   093_dblink_<database_link>.sql
+#     One file per object of the matching type.
+#
+#   060_package_<package>.pks
+#   061_package_body_<package>.pkb
+#     Separate files for package specifications and package bodies.
+#
+#   094_grants_to_user.sql
+#     Grants currently given to the connected user: roles, system privileges,
+#     object privileges, and column privileges.
+#
+# Notes:
+#   * Output is written by SQL*Plus SPOOL on the client machine.
+#   * The output directory path must not contain spaces, because generated SPOOL
+#     commands are deliberately not double-quoted.
+#   * During execution, terminal output is limited to "Extracting <filename>".
+
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  echo "Usage: $0 user/password@database output_directory" >&2
+  echo "Example: $0 scott/tiger@orclpdb /tmp/scott_ddl" >&2
+  exit 2
+fi
+
+if ! command -v exec_sql >/dev/null 2>&1; then
+  echo "Error: exec_sql function or command is not available." >&2
+  echo "Define exec_sql so it accepts: exec_sql connect_string script_path" >&2
+  exit 127
+fi
+
+CONNECT_STRING="$1"
+OUTPUT_DIR="$2"
+WORK_DIR="$(mktemp -d)"
+SQL_SCRIPT="$WORK_DIR/export_schema_ddl.sql"
+
+cleanup() {
+  rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+
+cat > "$SQL_SCRIPT" <<'SQL'
 -- Export the currently connected Oracle user's DDL to client-side files.
 -- Files are written by SQL*Plus SPOOL on the client machine.
 
@@ -28,7 +109,7 @@ prompt set linesize 32767
 prompt set long 1000000000
 prompt set longchunksize 32767
 prompt set trimspool on
-prompt set termout on
+prompt set termout off
 prompt column ddl format a32767
 prompt
 prompt exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, 'PRETTY', true);
@@ -47,20 +128,22 @@ table_commands as (
          '010_table_' ||
            regexp_replace(lower(table_name), '[^[:alnum:]_.-]+', '_') ||
            '.sql' as file_name,
-         'prompt Writing ' || output_dir || '/010_table_' ||
+         'set termout on' || chr(10) ||
+         'prompt Extracting 010_table_' ||
            regexp_replace(lower(table_name), '[^[:alnum:]_.-]+', '_') || '.sql' || chr(10) ||
+         'set termout off' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS'', true);' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''REF_CONSTRAINTS'', false);' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS_AS_ALTER'', false);' || chr(10) ||
          'spool ' || output_dir || '/010_table_' ||
            regexp_replace(lower(table_name), '[^[:alnum:]_.-]+', '_') || '.sql' || chr(10) ||
          'select dbms_metadata.get_ddl(''TABLE'', ''' ||
-           replace(table_name, '''', '''''') || ''') as ddl from dual;' || chr(10) ||
-         q'[select 'comment on table ' || table_name || ' is ''' || replace(comments, '''', '''''') || ''';' as ddl]' || chr(10) ||
+           replace(table_name, '''', '''''') || ''') || chr(10) as ddl from dual;' || chr(10) ||
+         q'[select 'comment on table ' || table_name || ' is ''' || replace(comments, '''', '''''') || ''';' || chr(10) as ddl]' || chr(10) ||
          'from user_tab_comments' || chr(10) ||
          'where table_name = ''' || replace(table_name, '''', '''''') || '''' || chr(10) ||
          'and comments is not null;' || chr(10) ||
-         q'[select 'comment on column ' || table_name || '.' || column_name || ' is ''' || replace(comments, '''', '''''') || ''';' as ddl]' || chr(10) ||
+         q'[select 'comment on column ' || table_name || '.' || column_name || ' is ''' || replace(comments, '''', '''''') || ''';' || chr(10) as ddl]' || chr(10) ||
          'from user_col_comments' || chr(10) ||
          'where table_name = ''' || replace(table_name, '''', '''''') || '''' || chr(10) ||
          'and comments is not null' || chr(10) ||
@@ -73,10 +156,12 @@ table_commands as (
 group_commands as (
   select 200 as sort_order,
          '020_referential_constraints.sql' as file_name,
-         'prompt Writing ' || output_dir || '/020_referential_constraints.sql' || chr(10) ||
+         'set termout on' || chr(10) ||
+         'prompt Extracting 020_referential_constraints.sql' || chr(10) ||
+         'set termout off' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS_AS_ALTER'', true);' || chr(10) ||
          'spool ' || output_dir || '/020_referential_constraints.sql' || chr(10) ||
-         'select dbms_metadata.get_ddl(''REF_CONSTRAINT'', constraint_name) as ddl' || chr(10) ||
+         'select dbms_metadata.get_ddl(''REF_CONSTRAINT'', constraint_name) || chr(10) as ddl' || chr(10) ||
          'from user_constraints' || chr(10) ||
          'where constraint_type = ''R''' || chr(10) ||
          'order by table_name, constraint_name;' || chr(10) ||
@@ -85,18 +170,54 @@ group_commands as (
   union all
   select 300 as sort_order,
          '030_sequences.sql' as file_name,
-         'prompt Writing ' || output_dir || '/030_sequences.sql' || chr(10) ||
+         'set termout on' || chr(10) ||
+         'prompt Extracting 030_sequences.sql' || chr(10) ||
+         'set termout off' || chr(10) ||
          'spool ' || output_dir || '/030_sequences.sql' || chr(10) ||
-         'select dbms_metadata.get_ddl(''SEQUENCE'', s.sequence_name) as ddl' || chr(10) ||
+         'select dbms_metadata.get_ddl(''SEQUENCE'', s.sequence_name) || chr(10) as ddl' || chr(10) ||
          'from user_sequences s' || chr(10) ||
-         'where substr(s.sequence_name, 1, 7) <> ''ISEQ$$_''' || chr(10) ||
+         'where substr(s.sequence_name, 1, 7) <> ''ISEQ\$\$_''' || chr(10) ||
          'and not exists (' || chr(10) ||
          '  select 1' || chr(10) ||
          '  from user_tab_identity_cols ic' || chr(10) ||
          '  join user_objects o on o.object_name = ic.table_name and o.object_type = ''TABLE''' || chr(10) ||
-         '  where s.sequence_name = ''ISEQ$$_'' || o.object_id' || chr(10) ||
+         '  where s.sequence_name = ''ISEQ\$\$_'' || o.object_id' || chr(10) ||
          ')' || chr(10) ||
          'order by s.sequence_name;' || chr(10) ||
+         'spool off' || chr(10) as ddl_command
+  from params
+  union all
+  select 940 as sort_order,
+         '094_grants_to_user.sql' as file_name,
+         'set termout on' || chr(10) ||
+         'prompt Extracting 094_grants_to_user.sql' || chr(10) ||
+         'set termout off' || chr(10) ||
+         'spool ' || output_dir || '/094_grants_to_user.sql' || chr(10) ||
+         'select ddl' || chr(10) ||
+         'from (' || chr(10) ||
+         '  select 10 as sort_order,' || chr(10) ||
+         '         ''grant '' || granted_role || '' to '' || username ||' || chr(10) ||
+         '         case when admin_option = ''YES'' then '' with admin option'' end || '';'' || chr(10) || chr(10) as ddl' || chr(10) ||
+         '  from user_role_privs' || chr(10) ||
+         '  union all' || chr(10) ||
+         '  select 20 as sort_order,' || chr(10) ||
+         '         ''grant '' || privilege || '' to '' || username ||' || chr(10) ||
+         '         case when admin_option = ''YES'' then '' with admin option'' end || '';'' || chr(10) || chr(10) as ddl' || chr(10) ||
+         '  from user_sys_privs' || chr(10) ||
+         '  union all' || chr(10) ||
+         '  select 30 as sort_order,' || chr(10) ||
+         '         ''grant '' || privilege || '' on '' || owner || ''.'' || table_name || '' to '' || grantee ||' || chr(10) ||
+         '         case when grantable = ''YES'' then '' with grant option'' end || '';'' || chr(10) || chr(10) as ddl' || chr(10) ||
+         '  from user_tab_privs' || chr(10) ||
+         '  where grantee = user' || chr(10) ||
+         '  union all' || chr(10) ||
+         '  select 40 as sort_order,' || chr(10) ||
+         '         ''grant '' || privilege || '' ('' || column_name || '') on '' || owner || ''.'' || table_name || '' to '' || grantee ||' || chr(10) ||
+         '         case when grantable = ''YES'' then '' with grant option'' end || '';'' || chr(10) || chr(10) as ddl' || chr(10) ||
+         '  from user_col_privs' || chr(10) ||
+         '  where grantee = user' || chr(10) ||
+         ')' || chr(10) ||
+         'order by sort_order, ddl;' || chr(10) ||
          'spool off' || chr(10) as ddl_command
   from params
 ),
@@ -135,7 +256,8 @@ object_commands as (
            when 'PACKAGE BODY' then '.pkb'
            else '.sql'
          end as file_name,
-         'prompt Writing ' || p.output_dir || '/' ||
+         'set termout on' || chr(10) ||
+         'prompt Extracting ' ||
          case o.object_type
            when 'INDEX' then '040_index_'
            when 'VIEW' then '050_view_'
@@ -156,6 +278,7 @@ object_commands as (
            when 'PACKAGE BODY' then '.pkb'
            else '.sql'
          end || chr(10) ||
+         'set termout off' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''CONSTRAINTS'', false);' || chr(10) ||
          'exec dbms_metadata.set_transform_param(dbms_metadata.session_transform, ''REF_CONSTRAINTS'', false);' || chr(10) ||
          'spool ' || p.output_dir || '/' ||
@@ -187,7 +310,7 @@ object_commands as (
            when 'TYPE BODY' then 'TYPE_BODY'
            else replace(o.object_type, ' ', '_')
          end || ''', ''' ||
-         replace(o.object_name, '''', '''''') || ''') as ddl from dual;' || chr(10) ||
+         replace(o.object_name, '''', '''''') || ''') || chr(10) as ddl from dual;' || chr(10) ||
          'spool off' || chr(10) as ddl_command
   from user_objects o
   cross join params p
@@ -218,13 +341,16 @@ from (
 order by sort_order, file_name;
 
 prompt
-prompt prompt Done.
 prompt exit
 
 spool off
 
-set termout on
-prompt Generated &&runner_file
-prompt Exporting current schema to client directory &&output_dir
-
 @&&runner_file
+SQL
+
+escaped_output_dir="$(printf '%s' "$OUTPUT_DIR" | sed "s/[\/&]/\\\\&/g; s/'/''/g")"
+sed "s/__OUTPUT_DIR__/$escaped_output_dir/g" "$SQL_SCRIPT" > "$SQL_SCRIPT.tmp"
+mv "$SQL_SCRIPT.tmp" "$SQL_SCRIPT"
+
+cd "$WORK_DIR"
+exec_sql "$CONNECT_STRING" "$SQL_SCRIPT"
